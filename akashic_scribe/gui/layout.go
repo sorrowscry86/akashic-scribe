@@ -318,12 +318,32 @@ func createExecutionStep(window fyne.Window, options *ScribeOptions, engine core
 		go func() {
 			err := engine.StartProcessing(*options, progressChan)
 			if err != nil {
+				// Create user-friendly error message
+				errorTitle := "Processing Error"
+				errorMsg := err.Error()
+
+				// Categorize common errors for better user experience
+				if strings.Contains(errorMsg, "yt-dlp not found") {
+					errorTitle = "Missing Dependency: yt-dlp"
+					errorMsg = "yt-dlp is required to download videos from URLs. Please install it using:\nwinget install yt-dlp"
+				} else if strings.Contains(errorMsg, "ffmpeg not found") {
+					errorTitle = "Missing Dependency: FFmpeg"
+					errorMsg = "FFmpeg is required to process video files. Please install it using:\nwinget install ffmpeg"
+				} else if strings.Contains(errorMsg, "input file not found") {
+					errorTitle = "File Not Found"
+					errorMsg = "The selected video file could not be found. Please check the file path and try again."
+				} else if strings.Contains(errorMsg, "failed to download") {
+					errorTitle = "Download Failed"
+					errorMsg = "Failed to download the video from the provided URL. Please check the URL and your internet connection."
+				}
+
 				fyne.CurrentApp().SendNotification(&fyne.Notification{
-					Title:   "Processing Error",
-					Content: err.Error(),
+					Title:   errorTitle,
+					Content: errorMsg,
 				})
 				fyne.Do(func() {
-					statusLabel.SetText("Status: Error during processing.")
+					statusLabel.SetText("Status: " + errorTitle)
+					progress.SetValue(0)
 					viewStack.Objects = []fyne.CanvasObject{startButton}
 					viewStack.Refresh()
 				})
