@@ -1,0 +1,45 @@
+
+# Go specific
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+go.work
+
+# Fyne specific
+fyne-cross/
+
+# Binaries for programs and plugins
+bin/
+build/
+
+# Output of the go coverage tool
+*.cover
+
+# Dependency directories
+vendor/
+
+# Environment files
+.env*
+
+# OS specific
+.DS_Store
+Thumbs.db
+*.swp
+*~
+
+# IDE specific
+.idea/
+.vscode/
+*.sublime-*
+
+# Project specific
+.agentic-tools-mcp/
+.specstory/
+.codacy/
+
+# Ignore insiders AI rules
+.github/instructions/codacy.instructions.md

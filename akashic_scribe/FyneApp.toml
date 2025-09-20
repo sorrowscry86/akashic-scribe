@@ -1,0 +1,6 @@
+[Details]
+Name = "Akashic Scribe"
+ID = "com.voidcat.akashicscribe"
+
+[Migrations]
+fyneDo = true

@@ -1,0 +1,270 @@
+remote_theme: pmarsceill/just-the-docs
+
+# Site settings
+title: Akashic Scribe Documentation
+description: "Comprehensive documentation for the Akashic Scribe video transcription, translation, and dubbing application by VoidCat RDC"
+baseurl: "/akashic-scribe"
+url: "https://sorrowscry86.github.io"
+
+# VoidCat RDC branding
+logo: "/assets/images/voidcat-logo.png"
+favicon_ico: "/assets/images/favicon.ico"
+
+# Navigation structure
+nav_external_links:
+  - title: GitHub Repository
+    url: https://github.com/sorrowscry86/akashic-scribe
+    hide_icon: false
+    opens_in_new_tab: true
+  - title: VoidCat RDC
+    url: https://voidcat.org
+    hide_icon: false
+    opens_in_new_tab: true
+
+# Aux links for the upper right navigation
+aux_links:
+  "View on GitHub":
+    - "https://github.com/sorrowscry86/akashic-scribe"
+  "Download Latest":
+    - "https://github.com/sorrowscry86/akashic-scribe/releases/latest"
+
+# Footer content with VoidCat RDC branding
+footer_content: |
+  <p><strong>© 2024 VoidCat RDC, LLC. All rights reserved.</strong></p>
+  <p>Developed by <a href="https://github.com/sorrowscry86">Wykeve Freeman (Sorrow Eternal)</a></p>
+  <p>Contact: <a href="mailto:SorrowsCry86@voidcat.org">SorrowsCry86@voidcat.org</a></p>
+  <p><em>Excellence in Digital Innovation</em></p>
+
+# Color scheme - VoidCat RDC purple theme
+color_scheme: voidcat
+
+# Search configuration
+search_enabled: true
+search:
+  heading_level: 2
+  previews: 3
+  preview_words_before: 5
+  preview_words_after: 10
+  tokenizer_separator: /[\s/]+/
+  rel_url: true
+  button: false
+
+# Enable heading anchors
+heading_anchors: true
+
+# Table of contents configuration
+toc:
+  enabled: true
+  h_min: 2
+  h_max: 3
+
+# Code highlighting
+highlighter: rouge
+kramdown:
+  syntax_highlighter: rouge
+  syntax_highlighter_opts:
+    block:
+      line_numbers: true
+
+# Plugin configuration
+plugins:
+  - jekyll-sitemap
+  - jekyll-feed
+  - jekyll-seo-tag
+  - jekyll-redirect-from
+
+# SEO and social media
+author:
+  name: "VoidCat RDC"
+  email: "SorrowsCry86@voidcat.org"
+  twitter: "@VoidCatRDC"
+
+twitter:
+  username: VoidCatRDC
+  card: summary_large_image
+
+social:
+  name: VoidCat RDC
+  links:
+    - https://github.com/sorrowscry86
+    - https://github.com/VoidCatRDC
+
+# Google Analytics (optional)
+# google_analytics: UA-XXXXXXXX-X
+
+# Additional metadata
+lang: en-US
+timezone: America/New_York
+
+# Build settings
+markdown: kramdown
+exclude:
+  - Gemfile
+  - Gemfile.lock
+  - node_modules
+  - vendor/bundle/
+  - vendor/cache/
+  - vendor/gems/
+  - vendor/ruby/
+  - "*.gemspec"
+  - "*.gem"
+  - "package*.json"
+  - README.md
+  - LICENSE
+  - CNAME
+  - .sass-cache
+  - .jekyll-cache
+  - gemfiles/
+  - .DS_Store
+  - Thumbs.db
+
+# Include files
+include:
+  - _pages
+  - assets
+
+# Collections
+collections:
+  docs:
+    permalink: "/:collection/:name/"
+    output: true
+
+# Default values
+defaults:
+  - scope:
+      path: ""
+      type: "pages"
+    values:
+      layout: "default"
+  - scope:
+      path: ""
+      type: "docs"
+    values:
+      layout: "default"
+  - scope:
+      path: "assets/images"
+    values:
+      image: true
+
+# Custom variables for VoidCat RDC
+voidcat:
+  company_name: "VoidCat RDC, LLC"
+  product_name: "Akashic Scribe"
+  developer_name: "Wykeve Freeman (Sorrow Eternal)"
+  contact_email: "SorrowsCry86@voidcat.org"
+  github_username: "sorrowscry86"
+  support_cashapp: "$WykeveTF"
+  tagline: "Excellence in Digital Innovation"
+
+# Documentation structure
+nav_structure:
+  - title: "Home"
+    url: "/"
+  - title: "Installation"
+    url: "/installation/"
+  - title: "User Guide"
+    url: "/user-guide/"
+    children:
+      - title: "Getting Started"
+        url: "/user-guide/getting-started/"
+      - title: "Features"
+        url: "/user-guide/features/"
+      - title: "Troubleshooting"
+        url: "/user-guide/troubleshooting/"
+  - title: "Developer Guide"
+    url: "/developer-guide/"
+    children:
+      - title: "Architecture"
+        url: "/developer-guide/architecture/"
+      - title: "Contributing"
+        url: "/developer-guide/contributing/"
+      - title: "Testing"
+        url: "/developer-guide/testing/"
+  - title: "API Documentation"
+    url: "/api/"
+    children:
+      - title: "Core Engine"
+        url: "/api/core-engine/"
+      - title: "GUI Components"
+        url: "/api/gui-components/"
+      - title: "Options"
+        url: "/api/options/"
+  - title: "Changelog"
+    url: "/changelog/"
+
+# Enable mermaid diagrams
+mermaid:
+  version: "9.4.3"
+
+# Custom CSS and JavaScript
+sass:
+  style: compressed
+
+# Compression
+compress_html:
+  clippings: all
+  comments: all
+  endings: all
+  startings: []
+  blanklines: false
+  profile: false
+
+# Liquid options
+liquid:
+  error_mode: warn
+  strict_filters: false
+  strict_variables: false
+
+# GitHub Pages specific settings
+github: [metadata]
+safe: true
+incremental: false
+highlighter: rouge
+gist:
+  noscript: false
+
+# Repository information
+repository: sorrowscry86/akashic-scribe
+
+# Edit page links
+edit_page: true
+edit_page_text: "Edit this page on GitHub"
+edit_page_url: "https://github.com/sorrowscry86/akashic-scribe/edit/main/docs/"
+
+# Last modified date
+last_edit_timestamp: true
+last_edit_time_format: "%b %e %Y at %I:%M %p"
+
+# Mobile optimization
+mobile_menu_button_text: "Menu"
+
+# Custom theme overrides
+theme_config:
+  primary_color: "#663399"      # VoidCat purple
+  secondary_color: "#9966CC"    # Lighter purple
+  accent_color: "#CC99FF"       # Accent purple
+  text_color: "#333333"         # Dark text
+  background_color: "#FFFFFF"   # White background
+  link_color: "#663399"         # Purple links
+  code_background: "#F8F8F8"    # Light code background
+
+# Analytics and tracking
+analytics:
+  google:
+    tracking_id: ""  # Add your Google Analytics ID here
+  plausible:
+    domain: ""       # Add your Plausible domain here
+
+# Performance optimization
+performance:
+  lazy_loading: true
+  minify_html: true
+  optimize_images: true
+  critical_css: true
+
+# Security headers
+security:
+  content_security_policy: true
+  x_frame_options: "DENY"
+  x_content_type_options: "nosniff"
+  referrer_policy: "strict-origin-when-cross-origin"
