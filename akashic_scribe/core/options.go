@@ -1,5 +1,7 @@
 package core
 
+import "fmt"
+
 // ScribeOptions represents all user configuration for the transcription and translation process.
 //
 // === BACKEND INTEGRATION PHASE ===
@@ -25,9 +27,20 @@ type ScribeOptions struct {
 	SubtitlePosition   string // "Translation on Top" or "Translation on Bottom"
 
 	// Dubbing options
-	CreateDubbing  bool   // Whether to generate dubbed audio
-	VoiceModel     string // e.g., "Kore"
-	UseCustomVoice bool   // Whether to use a custom voice model
+	CreateDubbing     bool    // Whether to generate dubbed audio
+	VoiceModel        string  // e.g., "alloy", "echo", "fable", "onyx", "nova", "shimmer"
+	UseCustomVoice    bool    // Whether to use a custom voice model
+	CustomVoicePath   string  // Path to custom voice file for voice cloning
+	VoiceSpeed        float64 // Speech speed (0.25 to 4.0, default 1.0)
+	VoicePitch        float64 // Voice pitch adjustment (-20 to 20 semitones, default 0)
+	VoiceStability    float64 // Voice stability (0.0 to 1.0, higher = more stable, default 0.5)
+	AudioFormat       string  // Output format: "mp3", "wav", "flac", "aac", "ogg" (default "mp3")
+	AudioQuality      string  // Quality: "low", "medium", "high", "lossless" (default "high")
+	AudioSampleRate   int     // Sample rate in Hz (8000, 16000, 22050, 44100, 48000, default 44100)
+	AudioBitRate      int     // Bit rate in kbps (64, 128, 192, 256, 320, default 192)
+	NormalizeAudio    bool    // Whether to normalize audio levels (default true)
+	RemoveSilence     bool    // Whether to remove long silences (default false)
+	AudioChannels     int     // Number of audio channels: 1 (mono) or 2 (stereo), default 2
 
 	// Output configuration
 	OutputDir string // Optional. If empty, defaults to the input file directory or a sensible default.
@@ -63,9 +76,40 @@ func (s ScribeOptions) String() string {
 	result += "Dubbing Options:\n"
 	if s.CreateDubbing {
 		result += "  Create Dubbing: Enabled\n"
-		result += "  Voice Model: " + s.VoiceModel + "\n"
-		if s.UseCustomVoice {
-			result += "  Custom Voice: Enabled\n"
+		if s.UseCustomVoice && s.CustomVoicePath != "" {
+			result += "  Custom Voice: " + s.CustomVoicePath + "\n"
+		} else if s.VoiceModel != "" {
+			result += "  Voice Model: " + s.VoiceModel + "\n"
+		}
+		if s.VoiceSpeed > 0 {
+			result += fmt.Sprintf("  Voice Speed: %.2fx\n", s.VoiceSpeed)
+		}
+		if s.VoicePitch != 0 {
+			result += fmt.Sprintf("  Voice Pitch: %+.1f semitones\n", s.VoicePitch)
+		}
+		if s.VoiceStability > 0 {
+			result += fmt.Sprintf("  Voice Stability: %.2f\n", s.VoiceStability)
+		}
+		if s.AudioFormat != "" {
+			result += "  Audio Format: " + s.AudioFormat + "\n"
+		}
+		if s.AudioQuality != "" {
+			result += "  Audio Quality: " + s.AudioQuality + "\n"
+		}
+		if s.AudioSampleRate > 0 {
+			result += fmt.Sprintf("  Sample Rate: %d Hz\n", s.AudioSampleRate)
+		}
+		if s.AudioBitRate > 0 {
+			result += fmt.Sprintf("  Bit Rate: %d kbps\n", s.AudioBitRate)
+		}
+		if s.AudioChannels > 0 {
+			result += fmt.Sprintf("  Channels: %d\n", s.AudioChannels)
+		}
+		if s.NormalizeAudio {
+			result += "  Normalize Audio: Enabled\n"
+		}
+		if s.RemoveSilence {
+			result += "  Remove Silence: Enabled\n"
 		}
 	} else {
 		result += "  Create Dubbing: Disabled\n"

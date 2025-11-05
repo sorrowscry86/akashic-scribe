@@ -1,9 +1,12 @@
 package core
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -104,6 +107,279 @@ func (e *realScribeEngine) Translate(text string, targetLanguage string) (string
 	return dummyTranslation, nil
 }
 
+// setDefaultDubbingParams fills in default values for any unset dubbing parameters.
+func setDefaultDubbingParams(opts *ScribeOptions) {
+	if opts.VoiceSpeed == 0 {
+		opts.VoiceSpeed = 1.0
+	}
+	if opts.VoiceStability == 0 {
+		opts.VoiceStability = 0.5
+	}
+	if opts.AudioFormat == "" {
+		opts.AudioFormat = "mp3"
+	}
+	if opts.AudioQuality == "" {
+		opts.AudioQuality = "high"
+	}
+	if opts.AudioSampleRate == 0 {
+		opts.AudioSampleRate = 44100
+	}
+	if opts.AudioBitRate == 0 {
+		opts.AudioBitRate = 192
+	}
+	if opts.AudioChannels == 0 {
+		opts.AudioChannels = 2
+	}
+}
+
+// validateDubbingParams validates dubbing parameters and returns an error if invalid.
+func validateDubbingParams(opts ScribeOptions) error {
+	if opts.CreateDubbing {
+		// Validate voice model or custom voice
+		if !opts.UseCustomVoice && opts.VoiceModel == "" {
+			return errors.New("voice model must be specified when dubbing is enabled")
+		}
+		if opts.UseCustomVoice && opts.CustomVoicePath == "" {
+			return errors.New("custom voice path must be specified when using custom voice")
+		}
+		if opts.UseCustomVoice {
+			if _, err := os.Stat(opts.CustomVoicePath); err != nil {
+				return fmt.Errorf("custom voice file not found: %w", err)
+			}
+		}
+
+		// Validate voice speed
+		if opts.VoiceSpeed < 0.25 || opts.VoiceSpeed > 4.0 {
+			return fmt.Errorf("voice speed must be between 0.25 and 4.0, got %.2f", opts.VoiceSpeed)
+		}
+
+		// Validate voice pitch
+		if opts.VoicePitch < -20 || opts.VoicePitch > 20 {
+			return fmt.Errorf("voice pitch must be between -20 and 20 semitones, got %.1f", opts.VoicePitch)
+		}
+
+		// Validate voice stability
+		if opts.VoiceStability < 0 || opts.VoiceStability > 1.0 {
+			return fmt.Errorf("voice stability must be between 0.0 and 1.0, got %.2f", opts.VoiceStability)
+		}
+
+		// Validate audio format
+		validFormats := map[string]bool{"mp3": true, "wav": true, "flac": true, "aac": true, "ogg": true}
+		if !validFormats[opts.AudioFormat] {
+			return fmt.Errorf("invalid audio format: %s (must be mp3, wav, flac, aac, or ogg)", opts.AudioFormat)
+		}
+
+		// Validate audio quality
+		validQualities := map[string]bool{"low": true, "medium": true, "high": true, "lossless": true}
+		if !validQualities[opts.AudioQuality] {
+			return fmt.Errorf("invalid audio quality: %s (must be low, medium, high, or lossless)", opts.AudioQuality)
+		}
+
+		// Validate sample rate
+		validSampleRates := map[int]bool{8000: true, 16000: true, 22050: true, 44100: true, 48000: true}
+		if !validSampleRates[opts.AudioSampleRate] {
+			return fmt.Errorf("invalid sample rate: %d Hz (must be 8000, 16000, 22050, 44100, or 48000)", opts.AudioSampleRate)
+		}
+
+		// Validate bit rate
+		if opts.AudioBitRate < 64 || opts.AudioBitRate > 320 {
+			return fmt.Errorf("bit rate must be between 64 and 320 kbps, got %d", opts.AudioBitRate)
+		}
+
+		// Validate channels
+		if opts.AudioChannels != 1 && opts.AudioChannels != 2 {
+			return fmt.Errorf("audio channels must be 1 (mono) or 2 (stereo), got %d", opts.AudioChannels)
+		}
+	}
+	return nil
+}
+
+// GenerateDubbing generates dubbed audio from translated text using TTS.
+// This function supports both OpenAI TTS and custom voice synthesis.
+func (e *realScribeEngine) GenerateDubbing(translation string, opts ScribeOptions, outputDir string) (string, error) {
+	// Set default parameters
+	setDefaultDubbingParams(&opts)
+
+	// Validate parameters
+	if err := validateDubbingParams(opts); err != nil {
+		return "", fmt.Errorf("invalid dubbing parameters: %w", err)
+	}
+
+	// Create temp file for raw TTS output
+	tempDir, err := os.MkdirTemp("", "akashic_scribe_tts_*")
+	if err != nil {
+		return "", fmt.Errorf("failed to create temp directory: %w", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	rawAudioPath := filepath.Join(tempDir, "raw_tts.mp3")
+
+	// Generate TTS audio
+	if opts.UseCustomVoice {
+		// For custom voices, we would need a voice cloning service
+		// For now, we'll use a simulated approach with pitch/speed modifications
+		return "", errors.New("custom voice synthesis not yet implemented - requires voice cloning service integration")
+	} else {
+		// Use OpenAI TTS API
+		apiKey := os.Getenv("OPENAI_API_KEY")
+		if apiKey == "" {
+			return "", errors.New("OPENAI_API_KEY environment variable not set - required for TTS generation")
+		}
+
+		if err := e.generateOpenAITTS(translation, opts.VoiceModel, opts.VoiceSpeed, apiKey, rawAudioPath); err != nil {
+			return "", fmt.Errorf("failed to generate TTS audio: %w", err)
+		}
+	}
+
+	// Process audio with ffmpeg to apply additional effects and format conversion
+	finalAudioPath := filepath.Join(outputDir, fmt.Sprintf("dubbed_audio.%s", opts.AudioFormat))
+	if err := e.processAudio(rawAudioPath, finalAudioPath, opts); err != nil {
+		return "", fmt.Errorf("failed to process audio: %w", err)
+	}
+
+	return finalAudioPath, nil
+}
+
+// generateOpenAITTS calls the OpenAI TTS API to generate speech audio.
+func (e *realScribeEngine) generateOpenAITTS(text, model string, speed float64, apiKey, outputPath string) error {
+	// Validate model
+	validModels := map[string]bool{
+		"alloy":   true,
+		"echo":    true,
+		"fable":   true,
+		"onyx":    true,
+		"nova":    true,
+		"shimmer": true,
+	}
+	if !validModels[model] {
+		return fmt.Errorf("invalid OpenAI TTS model: %s", model)
+	}
+
+	// Prepare API request
+	requestBody := map[string]interface{}{
+		"model": "tts-1-hd", // Use high-quality TTS model
+		"input": text,
+		"voice": model,
+		"speed": speed,
+	}
+
+	jsonBody, err := json.Marshal(requestBody)
+	if err != nil {
+		return fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	// Make API request
+	req, err := http.NewRequest("POST", "https://api.openai.com/v1/audio/speech", bytes.NewBuffer(jsonBody))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: 5 * time.Minute}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to make API request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("OpenAI API error (status %d): %s", resp.StatusCode, string(bodyBytes))
+	}
+
+	// Save audio to file
+	outFile, err := os.Create(outputPath)
+	if err != nil {
+		return fmt.Errorf("failed to create output file: %w", err)
+	}
+	defer outFile.Close()
+
+	if _, err := io.Copy(outFile, resp.Body); err != nil {
+		return fmt.Errorf("failed to save audio: %w", err)
+	}
+
+	return nil
+}
+
+// processAudio applies audio effects and converts to the desired format using ffmpeg.
+func (e *realScribeEngine) processAudio(inputPath, outputPath string, opts ScribeOptions) error {
+	// Build ffmpeg command with audio filters
+	args := []string{"-i", inputPath}
+
+	// Build filter chain
+	var filters []string
+
+	// Apply pitch adjustment if specified
+	if opts.VoicePitch != 0 {
+		// Convert semitones to frequency ratio: ratio = 2^(semitones/12)
+		// For ffmpeg rubberband or asetrate/atempo combination
+		filters = append(filters, fmt.Sprintf("asetrate=%d*2^(%.2f/12),aresample=%d", opts.AudioSampleRate, opts.VoicePitch, opts.AudioSampleRate))
+	}
+
+	// Apply normalization if requested
+	if opts.NormalizeAudio {
+		filters = append(filters, "loudnorm")
+	}
+
+	// Remove silence if requested
+	if opts.RemoveSilence {
+		filters = append(filters, "silenceremove=start_periods=1:start_duration=0.1:start_threshold=-50dB:detection=peak,aformat=dblp,areverse,silenceremove=start_periods=1:start_duration=0.1:start_threshold=-50dB:detection=peak,aformat=dblp,areverse")
+	}
+
+	// Apply filter chain if any filters were added
+	if len(filters) > 0 {
+		args = append(args, "-af", strings.Join(filters, ","))
+	}
+
+	// Set audio codec based on format
+	switch opts.AudioFormat {
+	case "mp3":
+		args = append(args, "-acodec", "libmp3lame")
+	case "wav":
+		args = append(args, "-acodec", "pcm_s16le")
+	case "flac":
+		args = append(args, "-acodec", "flac")
+	case "aac":
+		args = append(args, "-acodec", "aac")
+	case "ogg":
+		args = append(args, "-acodec", "libvorbis")
+	}
+
+	// Set quality/bitrate based on audio quality setting
+	if opts.AudioFormat != "wav" && opts.AudioFormat != "flac" {
+		// For lossy formats, set bitrate
+		qualityBitrate := opts.AudioBitRate
+		if opts.AudioQuality == "low" && qualityBitrate > 128 {
+			qualityBitrate = 128
+		} else if opts.AudioQuality == "medium" && qualityBitrate > 192 {
+			qualityBitrate = 192
+		}
+		args = append(args, "-b:a", fmt.Sprintf("%dk", qualityBitrate))
+	}
+
+	// Set sample rate
+	args = append(args, "-ar", fmt.Sprintf("%d", opts.AudioSampleRate))
+
+	// Set channels (mono/stereo)
+	args = append(args, "-ac", fmt.Sprintf("%d", opts.AudioChannels))
+
+	// Overwrite output file
+	args = append(args, "-y", outputPath)
+
+	// Execute ffmpeg
+	cmd := exec.Command("ffmpeg", args...)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("ffmpeg processing failed: %w\nStderr: %s", err, stderr.String())
+	}
+
+	return nil
+}
+
 // StartProcessing runs the full pipeline and reports progress.
 func (e *realScribeEngine) StartProcessing(options ScribeOptions, progress chan<- ProgressUpdate) error {
 	// Check dependencies first
@@ -180,9 +456,23 @@ func (e *realScribeEngine) StartProcessing(options ScribeOptions, progress chan<
 	time.Sleep(400 * time.Millisecond)
 
 	// Step 5: (Optional) Dubbing
+	var dubbedAudioPath string
 	if opts.CreateDubbing {
-		progress <- ProgressUpdate{0.75, "Synthesizing dubbed audio..."}
-		time.Sleep(400 * time.Millisecond)
+		progress <- ProgressUpdate{0.75, "Synthesizing dubbed audio with TTS..."}
+
+		// Set default dubbing parameters
+		setDefaultDubbingParams(&opts)
+
+		// Generate dubbed audio
+		audioPath, err := e.GenerateDubbing(translation, opts, outputDir)
+		if err != nil {
+			progress <- ProgressUpdate{0.75, fmt.Sprintf("Warning: Dubbing failed: %v", err)}
+			// Don't fail the entire process, just log the warning
+			// User can still get transcription and translation
+		} else {
+			dubbedAudioPath = audioPath
+			progress <- ProgressUpdate{0.80, "Dubbed audio generated successfully"}
+		}
 	}
 
 	// Step 6: (Optional) Subtitles
@@ -197,9 +487,15 @@ func (e *realScribeEngine) StartProcessing(options ScribeOptions, progress chan<
 
 	// Step 8: Complete
 	result := struct {
-		Transcription string
-		Translation   string
-	}{transcription, translation}
+		Transcription  string
+		Translation    string
+		DubbedAudio    string `json:",omitempty"`
+		SubtitlesFile  string `json:",omitempty"`
+	}{
+		Transcription: transcription,
+		Translation:   translation,
+		DubbedAudio:   dubbedAudioPath,
+	}
 
 	// Save outputs to disk
 	// Work out output directory
@@ -228,10 +524,12 @@ func (e *realScribeEngine) StartProcessing(options ScribeOptions, progress chan<
 	}
 	if opts.CreateSubtitles {
 		srt := "1\n00:00:00,000 --> 00:00:03,000\n" + translation + "\n\n"
-		if err := os.WriteFile(filepath.Join(outputDir, "subtitles.srt"), []byte(srt), 0o644); err != nil {
+		subtitlesPath := filepath.Join(outputDir, "subtitles.srt")
+		if err := os.WriteFile(subtitlesPath, []byte(srt), 0o644); err != nil {
 			progress <- ProgressUpdate{0.0, fmt.Sprintf("Failed to write subtitles: %v", err)}
 			return fmt.Errorf("failed to write subtitles: %w", err)
 		}
+		result.SubtitlesFile = subtitlesPath
 	}
 
 	resultJSON, _ := json.MarshalIndent(result, "", "  ")
