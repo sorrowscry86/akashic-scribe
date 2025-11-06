@@ -224,16 +224,136 @@ func createConfigStep(window fyne.Window, options *ScribeOptions) *widget.Card {
 	// --- Dubbing Configuration ---
 	voiceSelect := widget.NewSelect([]string{"alloy", "echo", "fable", "onyx", "nova", "shimmer"}, func(s string) {
 		options.VoiceModel = s
+		options.UseCustomVoice = false
 	})
 	voiceSelect.PlaceHolder = "Select Voice Model"
+	voiceSelect.SetSelected("alloy") // Set default
+	options.VoiceModel = "alloy"
+
+	// Custom voice file picker
+	customVoiceLabel := widget.NewLabel("No custom voice selected")
+	customVoiceLabel.Hide()
+
+	clearCustomVoiceBtn := widget.NewButton("Clear Custom Voice", nil)
+	clearCustomVoiceBtn.Hide()
 
 	voiceCloneBtn := widget.NewButton("Use Custom Voice...", func() {
-		// This feature is not yet implemented.
-		// When implemented, set options.UseCustomVoice = true and update any related state.
-		options.UseCustomVoice = true
+		dlg := dialog.NewFileOpen(func(reader fyne.URIReadCloser, err error) {
+			if err != nil {
+				dialog.ShowError(err, window)
+				return
+			}
+			if reader == nil {
+				return
+			}
+			defer reader.Close()
+			options.UseCustomVoice = true
+			options.CustomVoicePath = reader.URI().Path()
+			customVoiceLabel.SetText("Custom: " + reader.URI().Name())
+			customVoiceLabel.Show()
+			clearCustomVoiceBtn.Show()
+			voiceSelect.ClearSelected()
+		}, window)
+		dlg.SetFilter(storage.NewExtensionFileFilter([]string{".mp3", ".wav", ".m4a", ".flac"}))
+		dlg.Show()
 	})
 
-	dubbingOptions := container.NewVBox(voiceSelect, voiceCloneBtn)
+	clearCustomVoiceBtn.OnTapped = func() {
+		options.UseCustomVoice = false
+		options.CustomVoicePath = ""
+		customVoiceLabel.Hide()
+		clearCustomVoiceBtn.Hide()
+		voiceSelect.SetSelected("alloy")
+		options.VoiceModel = "alloy"
+	}
+
+	// Voice speed slider
+	voiceSpeedLabel := widget.NewLabel("Voice Speed: 1.00x")
+	voiceSpeedSlider := widget.NewSlider(0.25, 4.0)
+	voiceSpeedSlider.Value = 1.0
+	voiceSpeedSlider.Step = 0.05
+	voiceSpeedSlider.OnChanged = func(value float64) {
+		options.VoiceSpeed = value
+		voiceSpeedLabel.SetText(fmt.Sprintf("Voice Speed: %.2fx", value))
+	}
+	options.VoiceSpeed = 1.0
+
+	// Voice pitch slider
+	voicePitchLabel := widget.NewLabel("Voice Pitch: 0 semitones")
+	voicePitchSlider := widget.NewSlider(-20, 20)
+	voicePitchSlider.Value = 0
+	voicePitchSlider.Step = 1
+	voicePitchSlider.OnChanged = func(value float64) {
+		options.VoicePitch = value
+		voicePitchLabel.SetText(fmt.Sprintf("Voice Pitch: %+.0f semitones", value))
+	}
+	options.VoicePitch = 0
+
+	// Audio format selector
+	audioFormatSelect := widget.NewSelect([]string{"mp3", "wav", "flac", "aac", "ogg"}, func(s string) {
+		options.AudioFormat = s
+	})
+	audioFormatSelect.SetSelected("mp3")
+	options.AudioFormat = "mp3"
+
+	// Audio quality selector
+	audioQualitySelect := widget.NewSelect([]string{"low", "medium", "high", "lossless"}, func(s string) {
+		options.AudioQuality = s
+	})
+	audioQualitySelect.SetSelected("high")
+	options.AudioQuality = "high"
+
+	// Audio normalization checkbox
+	normalizeCheck := widget.NewCheck("Normalize Audio Levels", func(checked bool) {
+		options.NormalizeAudio = checked
+	})
+	normalizeCheck.SetChecked(true)
+	options.NormalizeAudio = true
+
+	// Remove silence checkbox
+	removeSilenceCheck := widget.NewCheck("Remove Long Silences", func(checked bool) {
+		options.RemoveSilence = checked
+	})
+	removeSilenceCheck.SetChecked(false)
+	options.RemoveSilence = false
+
+	// Advanced options section (collapsible)
+	advancedDubbingOptions := container.NewVBox(
+		widget.NewLabel("Voice Parameters:"),
+		voiceSpeedLabel,
+		voiceSpeedSlider,
+		voicePitchLabel,
+		voicePitchSlider,
+		widget.NewSeparator(),
+		widget.NewLabel("Audio Settings:"),
+		container.New(layout.NewFormLayout(),
+			widget.NewLabel("Format:"), audioFormatSelect,
+			widget.NewLabel("Quality:"), audioQualitySelect,
+		),
+		normalizeCheck,
+		removeSilenceCheck,
+	)
+	advancedDubbingOptions.Hide()
+
+	showAdvancedBtn := widget.NewButton("Show Advanced Options", nil)
+	showAdvancedBtn.OnTapped = func() {
+		if advancedDubbingOptions.Visible() {
+			advancedDubbingOptions.Hide()
+			showAdvancedBtn.SetText("Show Advanced Options")
+		} else {
+			advancedDubbingOptions.Show()
+			showAdvancedBtn.SetText("Hide Advanced Options")
+		}
+	}
+
+	dubbingOptions := container.NewVBox(
+		voiceSelect,
+		voiceCloneBtn,
+		customVoiceLabel,
+		clearCustomVoiceBtn,
+		showAdvancedBtn,
+		advancedDubbingOptions,
+	)
 	dubbingOptions.Hide() // Initially hidden.
 
 	dubbingToggle := widget.NewCheck("Create Dubbing", func(checked bool) {
