@@ -466,8 +466,9 @@ func (e *realScribeEngine) generateOpenAITTS(text, model string, speed float64, 
 		return fmt.Errorf("OpenAI API error (status %d): %s", resp.StatusCode, string(bodyBytes))
 	}
 
-	// Save audio to file
-	outFile, err := os.Create(outputPath)
+	// Save audio to file with restrictive permissions (owner-only read/write)
+	// Security: Use 0600 to prevent other users from reading potentially sensitive audio
+	outFile, err := os.OpenFile(outputPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
 	if err != nil {
 		return fmt.Errorf("failed to create output file: %w", err)
 	}
@@ -727,19 +728,21 @@ func (e *realScribeEngine) StartProcessing(options ScribeOptions, progress chan<
 	// Save outputs to disk (outputDir already prepared earlier)
 	progress <- ProgressUpdate{0.97, "Saving outputs..."}
 
-	// Write transcription and translation
-	if err := os.WriteFile(filepath.Join(outputDir, "transcription.txt"), []byte(transcription), 0o644); err != nil {
+	// Write transcription and translation with secure permissions
+	// Security: Use 0600 (owner-only read/write) to protect potentially sensitive content
+	if err := os.WriteFile(filepath.Join(outputDir, "transcription.txt"), []byte(transcription), 0600); err != nil {
 		progress <- ProgressUpdate{0.0, fmt.Sprintf("Failed to write transcription: %v", err)}
 		return fmt.Errorf("failed to write transcription: %w", err)
 	}
-	if err := os.WriteFile(filepath.Join(outputDir, "translation.txt"), []byte(translation), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(outputDir, "translation.txt"), []byte(translation), 0600); err != nil {
 		progress <- ProgressUpdate{0.0, fmt.Sprintf("Failed to write translation: %v", err)}
 		return fmt.Errorf("failed to write translation: %w", err)
 	}
 	if opts.CreateSubtitles {
 		srt := "1\n00:00:00,000 --> 00:00:03,000\n" + translation + "\n\n"
 		subtitlesPath := filepath.Join(outputDir, "subtitles.srt")
-		if err := os.WriteFile(subtitlesPath, []byte(srt), 0o644); err != nil {
+		// Security: Use 0600 to protect subtitle content
+		if err := os.WriteFile(subtitlesPath, []byte(srt), 0600); err != nil {
 			progress <- ProgressUpdate{0.0, fmt.Sprintf("Failed to write subtitles: %v", err)}
 			return fmt.Errorf("failed to write subtitles: %w", err)
 		}
