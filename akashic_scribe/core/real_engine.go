@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"os/exec"
@@ -50,7 +51,11 @@ func (e *realScribeEngine) Transcribe(videoSource string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("failed to create temporary directory: %w", err)
 	}
-	defer os.RemoveAll(tempDir)
+	defer func() {
+		if err := os.RemoveAll(tempDir); err != nil {
+			log.Printf("Warning: failed to clean up temp directory %s: %v", tempDir, err)
+		}
+	}()
 
 	var videoPath string
 
@@ -210,7 +215,11 @@ func (e *realScribeEngine) GenerateDubbing(translation string, opts ScribeOption
 	if err != nil {
 		return "", fmt.Errorf("failed to create temp directory: %w", err)
 	}
-	defer os.RemoveAll(tempDir)
+	defer func() {
+		if err := os.RemoveAll(tempDir); err != nil {
+			log.Printf("Warning: failed to clean up temp directory %s: %v", tempDir, err)
+		}
+	}()
 
 	rawAudioPath := filepath.Join(tempDir, "raw_tts.mp3")
 
@@ -412,7 +421,11 @@ func (e *realScribeEngine) StartProcessing(options ScribeOptions, progress chan<
 			progress <- ProgressUpdate{0.0, fmt.Sprintf("Failed to create temp directory: %v", err)}
 			return fmt.Errorf("failed to create temp directory: %w", err)
 		}
-		defer os.RemoveAll(tempDir)
+		defer func() {
+			if err := os.RemoveAll(tempDir); err != nil {
+				log.Printf("Warning: failed to clean up temp directory %s: %v", tempDir, err)
+			}
+		}()
 
 		videoPath = filepath.Join(tempDir, "downloaded_video.%(ext)s")
 		cmd := exec.Command("yt-dlp", "-o", videoPath, opts.InputURL)
@@ -455,6 +468,20 @@ func (e *realScribeEngine) StartProcessing(options ScribeOptions, progress chan<
 	}
 	time.Sleep(400 * time.Millisecond)
 
+	// Prepare output directory early (needed for dubbing and final outputs)
+	outputDir := opts.OutputDir
+	if outputDir == "" {
+		if opts.InputFile != "" {
+			outputDir = filepath.Dir(opts.InputFile)
+		} else {
+			outputDir = filepath.Join(os.TempDir(), "akashic_scribe_output")
+		}
+	}
+	if err := os.MkdirAll(outputDir, 0o755); err != nil {
+		progress <- ProgressUpdate{0.0, fmt.Sprintf("Failed to prepare output directory: %v", err)}
+		return fmt.Errorf("failed to prepare output directory: %w", err)
+	}
+
 	// Step 5: (Optional) Dubbing
 	var dubbedAudioPath string
 	if opts.CreateDubbing {
@@ -487,30 +514,17 @@ func (e *realScribeEngine) StartProcessing(options ScribeOptions, progress chan<
 
 	// Step 8: Complete
 	result := struct {
-		Transcription  string
-		Translation    string
-		DubbedAudio    string `json:",omitempty"`
-		SubtitlesFile  string `json:",omitempty"`
+		Transcription string
+		Translation   string
+		DubbedAudio   string `json:",omitempty"`
+		SubtitlesFile string `json:",omitempty"`
 	}{
 		Transcription: transcription,
 		Translation:   translation,
 		DubbedAudio:   dubbedAudioPath,
 	}
 
-	// Save outputs to disk
-	// Work out output directory
-	outputDir := opts.OutputDir
-	if outputDir == "" {
-		if opts.InputFile != "" {
-			outputDir = filepath.Dir(opts.InputFile)
-		} else {
-			outputDir = filepath.Join(os.TempDir(), "akashic_scribe_output")
-		}
-	}
-	if err := os.MkdirAll(outputDir, 0o755); err != nil {
-		progress <- ProgressUpdate{0.0, fmt.Sprintf("Failed to prepare output directory: %v", err)}
-		return fmt.Errorf("failed to prepare output directory: %w", err)
-	}
+	// Save outputs to disk (outputDir already prepared earlier)
 	progress <- ProgressUpdate{0.97, "Saving outputs..."}
 
 	// Write transcription and translation

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
+	"runtime"
 	"strings"
 
 	"fyne.io/fyne/v2"
@@ -15,6 +16,25 @@ import (
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 )
+
+// openDirectory opens a directory in the system's file manager in a cross-platform way.
+func openDirectory(path string) error {
+	var cmd *exec.Cmd
+
+	switch runtime.GOOS {
+	case "windows":
+		cmd = exec.Command("explorer", path)
+	case "darwin":
+		cmd = exec.Command("open", path)
+	case "linux":
+		// Try common Linux file managers in order of preference
+		cmd = exec.Command("xdg-open", path)
+	default:
+		return fmt.Errorf("unsupported operating system: %s", runtime.GOOS)
+	}
+
+	return cmd.Start()
+}
 
 // CreateMainLayout constructs the primary UI structure.
 func CreateMainLayout(window fyne.Window, engine core.ScribeEngine) fyne.CanvasObject {
@@ -521,7 +541,7 @@ func createExecutionStep(window fyne.Window, options *ScribeOptions, engine core
 				downloadContainer.Add(entry)
 				downloadContainer.Add(widget.NewButton("Open Output Folder", func() {
 					if outputDir != "" {
-						if err := exec.Command("explorer", outputDir).Start(); err != nil {
+						if err := openDirectory(outputDir); err != nil {
 							dialog.ShowError(err, window)
 						}
 					}
