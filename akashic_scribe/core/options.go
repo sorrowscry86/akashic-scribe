@@ -27,20 +27,20 @@ type ScribeOptions struct {
 	SubtitlePosition   string // "Translation on Top" or "Translation on Bottom"
 
 	// Dubbing options
-	CreateDubbing     bool    // Whether to generate dubbed audio
-	VoiceModel        string  // e.g., "alloy", "echo", "fable", "onyx", "nova", "shimmer"
-	UseCustomVoice    bool    // Whether to use a custom voice model
-	CustomVoicePath   string  // Path to custom voice file for voice cloning
-	VoiceSpeed        float64 // Speech speed (0.25 to 4.0, default 1.0)
-	VoicePitch        float64 // Voice pitch adjustment (-20 to 20 semitones, default 0)
-	VoiceStability    float64 // Voice stability (0.0 to 1.0, higher = more stable, default 0.5)
-	AudioFormat       string  // Output format: "mp3", "wav", "flac", "aac", "ogg" (default "mp3")
-	AudioQuality      string  // Quality: "low", "medium", "high", "lossless" (default "high")
-	AudioSampleRate   int     // Sample rate in Hz (8000, 16000, 22050, 44100, 48000, default 44100)
-	AudioBitRate      int     // Bit rate in kbps (64, 128, 192, 256, 320, default 192)
-	NormalizeAudio    bool    // Whether to normalize audio levels (default true)
-	RemoveSilence     bool    // Whether to remove long silences (default false)
-	AudioChannels     int     // Number of audio channels: 1 (mono) or 2 (stereo), default 2
+	CreateDubbing   bool    // Whether to generate dubbed audio
+	VoiceModel      string  // e.g., "alloy", "echo", "fable", "onyx", "nova", "shimmer"
+	UseCustomVoice  bool    // Whether to use a custom voice model
+	CustomVoicePath string  // Path to custom voice file for voice cloning
+	VoiceSpeed      float64 // Speech speed (0.25 to 4.0, default 1.0)
+	VoicePitch      float64 // Voice pitch adjustment (-20 to 20 semitones, default 0)
+	VoiceStability  float64 // Voice stability (0.0 to 1.0, higher = more stable, default 0.5)
+	AudioFormat     string  // Output format: "mp3", "wav", "flac", "aac", "ogg" (default "mp3")
+	AudioQuality    string  // Quality: "low", "medium", "high", "lossless" (default "high")
+	AudioSampleRate int     // Sample rate in Hz (8000, 16000, 22050, 44100, 48000, default 44100)
+	AudioBitRate    int     // Bit rate in kbps (64, 128, 192, 256, 320, default 192)
+	NormalizeAudio  bool    // Whether to normalize audio levels (default true)
+	RemoveSilence   bool    // Whether to remove long silences (default false)
+	AudioChannels   int     // Number of audio channels: 1 (mono) or 2 (stereo), default 2
 
 	// Output configuration
 	OutputDir string // Optional. If empty, defaults to the input file directory or a sensible default.
