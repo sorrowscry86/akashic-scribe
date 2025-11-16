@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"mime/multipart"
 	"net/http"
 	"os"
 	"os/exec"
@@ -94,22 +95,179 @@ func (e *realScribeEngine) Transcribe(videoSource string) (string, error) {
 		return "", fmt.Errorf("audio extraction failed - no output file: %w", err)
 	}
 
-	// --- Placeholder for actual transcription ---
-	// In a real implementation, you would call a transcription service (e.g., Whisper) here.
-	// For now, we will just return a dummy transcription based on the file.
-	dummyTranscription := fmt.Sprintf("This is a dummy transcription of the video from: %s", filepath.Base(videoPath))
+	// Transcribe audio using OpenAI Whisper API
+	transcription, err := e.transcribeWithWhisper(audioPath)
+	if err != nil {
+		return "", fmt.Errorf("transcription failed: %w", err)
+	}
 
-	return dummyTranscription, nil
+	return transcription, nil
+}
+
+// transcribeWithWhisper uses OpenAI's Whisper API to transcribe audio.
+func (e *realScribeEngine) transcribeWithWhisper(audioPath string) (string, error) {
+	// Get API key from environment
+	apiKey := os.Getenv("OPENAI_API_KEY")
+	if apiKey == "" {
+		return "", errors.New("OPENAI_API_KEY environment variable not set - required for transcription")
+	}
+
+	// Open audio file
+	file, err := os.Open(audioPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to open audio file: %w", err)
+	}
+	defer file.Close()
+
+	// Create multipart form for file upload
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+
+	// Add the audio file
+	part, err := writer.CreateFormFile("file", filepath.Base(audioPath))
+	if err != nil {
+		return "", fmt.Errorf("failed to create form file: %w", err)
+	}
+
+	if _, err := io.Copy(part, file); err != nil {
+		return "", fmt.Errorf("failed to copy file data: %w", err)
+	}
+
+	// Add model parameter
+	if err := writer.WriteField("model", "whisper-1"); err != nil {
+		return "", fmt.Errorf("failed to add model field: %w", err)
+	}
+
+	// Add response format (default is json, but we can specify)
+	if err := writer.WriteField("response_format", "json"); err != nil {
+		return "", fmt.Errorf("failed to add response format field: %w", err)
+	}
+
+	// Close the multipart writer
+	if err := writer.Close(); err != nil {
+		return "", fmt.Errorf("failed to close multipart writer: %w", err)
+	}
+
+	// Create HTTP request
+	req, err := http.NewRequest("POST", "https://api.openai.com/v1/audio/transcriptions", body)
+	if err != nil {
+		return "", fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+
+	// Make the API request with timeout
+	client := &http.Client{Timeout: 5 * time.Minute}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("failed to make API request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	// Check response status
+	if resp.StatusCode != http.StatusOK {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("OpenAI API error (status %d): %s", resp.StatusCode, string(bodyBytes))
+	}
+
+	// Parse response
+	var result struct {
+		Text string `json:"text"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", fmt.Errorf("failed to parse API response: %w", err)
+	}
+
+	if result.Text == "" {
+		return "", errors.New("empty transcription received from API")
+	}
+
+	return result.Text, nil
 }
 
 // Translate takes a text and a target language, and returns the translation.
 func (e *realScribeEngine) Translate(text string, targetLanguage string) (string, error) {
-	// --- Placeholder for actual translation ---
-	// In a real implementation, you would call a translation service here.
-	// For now, we will just return a dummy translation.
-	dummyTranslation := fmt.Sprintf("This is a dummy translation of the text to %s.", targetLanguage)
+	// Use OpenAI GPT for translation
+	translation, err := e.translateWithGPT(text, targetLanguage)
+	if err != nil {
+		return "", fmt.Errorf("translation failed: %w", err)
+	}
 
-	return dummyTranslation, nil
+	return translation, nil
+}
+
+// translateWithGPT uses OpenAI's GPT API to translate text.
+func (e *realScribeEngine) translateWithGPT(text, targetLanguage string) (string, error) {
+	// Get API key from environment
+	apiKey := os.Getenv("OPENAI_API_KEY")
+	if apiKey == "" {
+		return "", errors.New("OPENAI_API_KEY environment variable not set - required for translation")
+	}
+
+	// Prepare the API request
+	requestBody := map[string]interface{}{
+		"model": "gpt-4",
+		"messages": []map[string]string{
+			{
+				"role":    "system",
+				"content": fmt.Sprintf("You are a professional translator. Translate the following text to %s. Preserve the original meaning, tone, and formatting. Only return the translated text without any explanations or additional comments.", targetLanguage),
+			},
+			{
+				"role":    "user",
+				"content": text,
+			},
+		},
+		"temperature": 0.3, // Lower temperature for more consistent translations
+	}
+
+	jsonBody, err := json.Marshal(requestBody)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	// Create HTTP request
+	req, err := http.NewRequest("POST", "https://api.openai.com/v1/chat/completions", bytes.NewBuffer(jsonBody))
+	if err != nil {
+		return "", fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	// Make the API request with timeout
+	client := &http.Client{Timeout: 2 * time.Minute}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("failed to make API request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	// Check response status
+	if resp.StatusCode != http.StatusOK {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("OpenAI API error (status %d): %s", resp.StatusCode, string(bodyBytes))
+	}
+
+	// Parse response
+	var result struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", fmt.Errorf("failed to parse API response: %w", err)
+	}
+
+	if len(result.Choices) == 0 || result.Choices[0].Message.Content == "" {
+		return "", errors.New("empty translation received from API")
+	}
+
+	return strings.TrimSpace(result.Choices[0].Message.Content), nil
 }
 
 // setDefaultDubbingParams fills in default values for any unset dubbing parameters.
@@ -400,7 +558,6 @@ func (e *realScribeEngine) StartProcessing(options ScribeOptions, progress chan<
 	opts := options
 
 	progress <- ProgressUpdate{0.01, "Preparing job..."}
-	time.Sleep(200 * time.Millisecond)
 
 	// Step 1: Download or use local file
 	var videoPath string
@@ -448,7 +605,6 @@ func (e *realScribeEngine) StartProcessing(options ScribeOptions, progress chan<
 
 	// Step 2: Extract audio
 	progress <- ProgressUpdate{0.25, "Extracting audio..."}
-	time.Sleep(400 * time.Millisecond)
 
 	// Step 3: Transcription
 	progress <- ProgressUpdate{0.40, "Transcribing audio..."}
@@ -457,7 +613,6 @@ func (e *realScribeEngine) StartProcessing(options ScribeOptions, progress chan<
 		progress <- ProgressUpdate{0.0, fmt.Sprintf("Transcription failed: %v", err)}
 		return fmt.Errorf("transcription failed: %w", err)
 	}
-	time.Sleep(400 * time.Millisecond)
 
 	// Step 4: Translation
 	progress <- ProgressUpdate{0.60, "Translating text..."}
@@ -466,7 +621,6 @@ func (e *realScribeEngine) StartProcessing(options ScribeOptions, progress chan<
 		progress <- ProgressUpdate{0.0, fmt.Sprintf("Translation failed: %v", err)}
 		return fmt.Errorf("translation failed: %w", err)
 	}
-	time.Sleep(400 * time.Millisecond)
 
 	// Prepare output directory early (needed for dubbing and final outputs)
 	outputDir := opts.OutputDir
@@ -505,12 +659,10 @@ func (e *realScribeEngine) StartProcessing(options ScribeOptions, progress chan<
 	// Step 6: (Optional) Subtitles
 	if opts.CreateSubtitles {
 		progress <- ProgressUpdate{0.85, "Generating subtitles..."}
-		time.Sleep(400 * time.Millisecond)
 	}
 
 	// Step 7: Compose final output
 	progress <- ProgressUpdate{0.95, "Composing final output..."}
-	time.Sleep(400 * time.Millisecond)
 
 	// Step 8: Complete
 	result := struct {
