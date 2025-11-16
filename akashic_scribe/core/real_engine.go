@@ -2,6 +2,7 @@ package core
 
 import (
 	"akashic_scribe/config"
+	"akashic_scribe/validation"
 	"bytes"
 	"encoding/json"
 	"errors"
@@ -564,19 +565,54 @@ func (e *realScribeEngine) StartProcessing(options ScribeOptions, progress chan<
 		return err
 	}
 
+	// Validate all user inputs before processing
+	validator := validation.NewInputValidator()
+
+	// Validate input source (file or URL)
+	if options.InputFile != "" {
+		if err := validator.ValidateInputFilePath(options.InputFile); err != nil {
+			progress <- ProgressUpdate{0.0, fmt.Sprintf("Invalid input file: %v", err)}
+			return fmt.Errorf("invalid input file: %w", err)
+		}
+	} else if options.InputURL != "" {
+		if err := validator.ValidateURL(options.InputURL); err != nil {
+			progress <- ProgressUpdate{0.0, fmt.Sprintf("Invalid input URL: %v", err)}
+			return fmt.Errorf("invalid input URL: %w", err)
+		}
+	} else {
+		progress <- ProgressUpdate{0.0, "No input source provided"}
+		return errors.New("no input source provided (file or URL required)")
+	}
+
+	// Validate output directory if specified
+	if err := validator.ValidateOutputDirectory(options.OutputDir); err != nil {
+		progress <- ProgressUpdate{0.0, fmt.Sprintf("Invalid output directory: %v", err)}
+		return fmt.Errorf("invalid output directory: %w", err)
+	}
+
+	// Validate custom voice file if specified
+	if options.UseCustomVoice && options.CustomVoicePath != "" {
+		if err := validator.ValidateAudioFilePath(options.CustomVoicePath); err != nil {
+			progress <- ProgressUpdate{0.0, fmt.Sprintf("Invalid custom voice file: %v", err)}
+			return fmt.Errorf("invalid custom voice file: %w", err)
+		}
+	}
+
 	opts := options
 
-	progress <- ProgressUpdate{0.01, "Preparing job..."}
+	progress <- ProgressUpdate{0.01, "Preparing job... (inputs validated)"}
 
 	// Step 1: Download or use local file
 	var videoPath string
 	if opts.InputFile != "" {
-		// Verify file exists
-		if _, err := os.Stat(opts.InputFile); err != nil {
+		// Sanitize the file path
+		videoPath = validator.SanitizePath(opts.InputFile)
+
+		// Verify file exists (already validated above, but double-check after sanitization)
+		if _, err := os.Stat(videoPath); err != nil {
 			progress <- ProgressUpdate{0.0, fmt.Sprintf("Input file not found: %v", err)}
 			return fmt.Errorf("input file not found: %w", err)
 		}
-		videoPath = opts.InputFile
 		progress <- ProgressUpdate{0.10, "Using local video file."}
 	} else if opts.InputURL != "" {
 		progress <- ProgressUpdate{0.10, "Downloading video from URL..."}
@@ -635,11 +671,14 @@ func (e *realScribeEngine) StartProcessing(options ScribeOptions, progress chan<
 	outputDir := opts.OutputDir
 	if outputDir == "" {
 		if opts.InputFile != "" {
-			outputDir = filepath.Dir(opts.InputFile)
+			outputDir = filepath.Dir(videoPath) // Use sanitized videoPath
 		} else {
 			outputDir = filepath.Join(os.TempDir(), "akashic_scribe_output")
 		}
 	}
+	// Sanitize the output directory path
+	outputDir = validator.SanitizePath(outputDir)
+
 	if err := os.MkdirAll(outputDir, 0o755); err != nil {
 		progress <- ProgressUpdate{0.0, fmt.Sprintf("Failed to prepare output directory: %v", err)}
 		return fmt.Errorf("failed to prepare output directory: %w", err)
