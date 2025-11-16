@@ -532,6 +532,9 @@ func createExecutionStep(window fyne.Window, options *ScribeOptions, engine core
 
 		// Start backend processing in a goroutine
 		go func() {
+			// IMPORTANT: The writer goroutine must close the channel when done
+			defer close(progressChan)
+
 			err := engine.StartProcessing(*options, progressChan)
 			if err != nil {
 				// Create user-friendly error message
@@ -568,7 +571,7 @@ func createExecutionStep(window fyne.Window, options *ScribeOptions, engine core
 
 		// Listen for progress updates and update the UI accordingly
 		go func() {
-			defer close(progressChan) // Close when done reading
+			// IMPORTANT: Reader goroutine should NOT close the channel - just consume until closed
 			var finalTranscription, finalTranslation, outputDir string
 			for update := range progressChan {
 				fyne.Do(func() {
