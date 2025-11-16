@@ -1,6 +1,7 @@
 package core
 
 import (
+	"akashic_scribe/config"
 	"bytes"
 	"encoding/json"
 	"errors"
@@ -106,10 +107,14 @@ func (e *realScribeEngine) Transcribe(videoSource string) (string, error) {
 
 // transcribeWithWhisper uses OpenAI's Whisper API to transcribe audio.
 func (e *realScribeEngine) transcribeWithWhisper(audioPath string) (string, error) {
-	// Get API key from environment
-	apiKey := os.Getenv("OPENAI_API_KEY")
-	if apiKey == "" {
-		return "", errors.New("OPENAI_API_KEY environment variable not set - required for transcription")
+	// Get API key from secure storage
+	storage := config.NewSecureStorage()
+	apiKey, err := storage.GetOpenAIKey()
+	if err != nil {
+		if err == config.ErrKeyNotFound {
+			return "", errors.New("OpenAI API key not configured - please set it in Settings")
+		}
+		return "", fmt.Errorf("failed to retrieve API key from secure storage: %w", err)
 	}
 
 	// Open audio file
@@ -200,10 +205,14 @@ func (e *realScribeEngine) Translate(text string, targetLanguage string) (string
 
 // translateWithGPT uses OpenAI's GPT API to translate text.
 func (e *realScribeEngine) translateWithGPT(text, targetLanguage string) (string, error) {
-	// Get API key from environment
-	apiKey := os.Getenv("OPENAI_API_KEY")
-	if apiKey == "" {
-		return "", errors.New("OPENAI_API_KEY environment variable not set - required for translation")
+	// Get API key from secure storage
+	storage := config.NewSecureStorage()
+	apiKey, err := storage.GetOpenAIKey()
+	if err != nil {
+		if err == config.ErrKeyNotFound {
+			return "", errors.New("OpenAI API key not configured - please set it in Settings")
+		}
+		return "", fmt.Errorf("failed to retrieve API key from secure storage: %w", err)
 	}
 
 	// Prepare the API request

@@ -1,6 +1,7 @@
 package gui
 
 import (
+	"akashic_scribe/config"
 	"akashic_scribe/core"
 	"encoding/json"
 	"fmt"
@@ -84,8 +85,9 @@ func createVideoTranslationView(window fyne.Window, options *ScribeOptions, engi
 	return container.NewBorder(nil, nil, nav, nil, stack)
 }
 
-// createSettingsView builds a simple settings panel for output directory selection.
+// createSettingsView builds a settings panel for output directory and API key configuration.
 func createSettingsView(window fyne.Window, options *ScribeOptions) fyne.CanvasObject {
+	// === Output Directory Section ===
 	current := widget.NewEntry()
 	current.Disable()
 	current.SetPlaceHolder("No folder selected")
@@ -113,13 +115,87 @@ func createSettingsView(window fyne.Window, options *ScribeOptions) fyne.CanvasO
 		current.SetText("")
 	})
 
-	content := container.NewVBox(
+	outputDirSection := container.NewVBox(
 		widget.NewLabelWithStyle("Output Directory", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
 		current,
 		container.NewHBox(pickBtn, resetBtn),
 	)
 
-	return widget.NewCard("Settings", "Configure application preferences.", content)
+	// === API Key Section ===
+	storage := config.NewSecureStorage()
+
+	// Check if API key is already stored
+	keyStatus := widget.NewLabel("")
+	keyStatus.Wrapping = fyne.TextWrapWord
+	if storage.HasOpenAIKey() {
+		keyStatus.SetText("✅ API Key is configured and stored securely")
+		keyStatus.TextStyle = fyne.TextStyle{Italic: true}
+	} else {
+		keyStatus.SetText("⚠️  No API key configured. Please enter your OpenAI API key below.")
+		keyStatus.TextStyle = fyne.TextStyle{Italic: true}
+	}
+
+	// API Key entry field
+	apiKeyEntry := widget.NewPasswordEntry()
+	apiKeyEntry.SetPlaceHolder("sk-proj-...")
+
+	// Save button
+	saveBtn := widget.NewButtonWithIcon("Save API Key", theme.ConfirmIcon(), func() {
+		apiKey := apiKeyEntry.Text
+		if apiKey == "" {
+			dialog.ShowError(fmt.Errorf("API key cannot be empty"), window)
+			return
+		}
+
+		// Store the API key securely
+		if err := storage.SetOpenAIKey(apiKey); err != nil {
+			dialog.ShowError(fmt.Errorf("failed to save API key: %w", err), window)
+			return
+		}
+
+		// Update status and clear the entry field
+		keyStatus.SetText("✅ API Key is configured and stored securely")
+		apiKeyEntry.SetText("")
+		dialog.ShowInformation("Success", "Your API key has been saved securely in the system keyring.", window)
+	})
+	saveBtn.Importance = widget.HighImportance
+
+	// Clear button
+	clearBtn := widget.NewButtonWithIcon("Clear API Key", theme.DeleteIcon(), func() {
+		dialog.ShowConfirm("Clear API Key", "Are you sure you want to remove the stored API key?", func(confirmed bool) {
+			if !confirmed {
+				return
+			}
+
+			if err := storage.DeleteOpenAIKey(); err != nil {
+				dialog.ShowError(fmt.Errorf("failed to clear API key: %w", err), window)
+				return
+			}
+
+			keyStatus.SetText("⚠️  No API key configured. Please enter your OpenAI API key below.")
+			apiKeyEntry.SetText("")
+			dialog.ShowInformation("Cleared", "Your API key has been removed from secure storage.", window)
+		}, window)
+	})
+	clearBtn.Importance = widget.LowImportance
+
+	apiKeySection := container.NewVBox(
+		widget.NewLabelWithStyle("OpenAI API Key", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+		keyStatus,
+		widget.NewLabel("Enter your OpenAI API key for transcription and translation:"),
+		apiKeyEntry,
+		container.NewHBox(saveBtn, clearBtn),
+		widget.NewLabel("🔒 Your API key is encrypted and stored securely in your system's keyring."),
+	)
+
+	// === Assemble all sections ===
+	content := container.NewVBox(
+		outputDirSection,
+		widget.NewSeparator(),
+		apiKeySection,
+	)
+
+	return widget.NewCard("Settings", "Configure application preferences and API keys.", content)
 }
 
 // createInputStep builds the UI for Step 1: The Offering.
