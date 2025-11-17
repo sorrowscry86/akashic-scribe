@@ -2,6 +2,7 @@ package gui
 
 import (
 	"akashic_scribe/core"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os/exec"
@@ -454,9 +455,13 @@ func createExecutionStep(window fyne.Window, options *ScribeOptions, engine core
 		// Use the real backend engine and progress channel
 		progressChan := make(chan core.ProgressUpdate)
 
+		// Create a context for the processing operation
+		// TODO: In the future, this can be a cancellable context with a Cancel button
+		ctx := context.Background()
+
 		// Start backend processing in a goroutine
 		go func() {
-			err := engine.StartProcessing(*options, progressChan)
+			err := engine.StartProcessing(ctx, *options, progressChan)
 			if err != nil {
 				// Create user-friendly error message
 				errorTitle := "Processing Error"

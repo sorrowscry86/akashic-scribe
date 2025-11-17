@@ -3,6 +3,7 @@ package main
 import (
 	"akashic_scribe/core"
 	"akashic_scribe/gui"
+	"context"
 	"testing"
 	"time"
 
@@ -181,7 +182,7 @@ func (suite *E2ETestSuite) testProcessingExecution() {
 
 	// Start processing in a goroutine
 	go func() {
-		err := suite.engine.StartProcessing(testOptions, progressChan)
+		err := suite.engine.StartProcessing(context.Background(), testOptions, progressChan)
 		assert.NoError(err, "Processing should complete without error")
 		close(progressChan)
 	}()

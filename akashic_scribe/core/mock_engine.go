@@ -1,6 +1,7 @@
 package core
 
 import (
+	"context"
 	"fmt"
 	"time"
 )
@@ -32,23 +33,54 @@ func (m *MockScribeEngine) Translate(text string, targetLanguage string) (string
 }
 
 // StartProcessing simulates the full processing pipeline with progress reporting.
-func (m *MockScribeEngine) StartProcessing(options ScribeOptions, progress chan<- ProgressUpdate) error {
+// The operation can be cancelled via the provided context.
+func (m *MockScribeEngine) StartProcessing(ctx context.Context, options ScribeOptions, progress chan<- ProgressUpdate) error {
 	fmt.Printf("Mock StartProcessing called with options: %+v\n", options)
+
+	// Check for cancellation before starting
+	select {
+	case <-ctx.Done():
+		return fmt.Errorf("operation cancelled before start: %w", ctx.Err())
+	default:
+	}
 
 	// Simulate the full processing pipeline with progress updates
 	progress <- ProgressUpdate{0.0, "Starting processing..."}
-	time.Sleep(50 * time.Millisecond)
+
+	// Simulate work with cancellation check
+	select {
+	case <-time.After(50 * time.Millisecond):
+	case <-ctx.Done():
+		return fmt.Errorf("operation cancelled: %w", ctx.Err())
+	}
 
 	progress <- ProgressUpdate{0.2, "Transcribing audio..."}
-	time.Sleep(100 * time.Millisecond)
+
+	select {
+	case <-time.After(100 * time.Millisecond):
+	case <-ctx.Done():
+		return fmt.Errorf("operation cancelled: %w", ctx.Err())
+	}
 
 	transcription, err := m.Transcribe(options.InputFile)
 	if err != nil {
 		return err
 	}
 
+	// Check for cancellation before translation
+	select {
+	case <-ctx.Done():
+		return fmt.Errorf("operation cancelled: %w", ctx.Err())
+	default:
+	}
+
 	progress <- ProgressUpdate{0.6, "Translating text..."}
-	time.Sleep(100 * time.Millisecond)
+
+	select {
+	case <-time.After(100 * time.Millisecond):
+	case <-ctx.Done():
+		return fmt.Errorf("operation cancelled: %w", ctx.Err())
+	}
 
 	translation, err := m.Translate(transcription, options.TargetLanguage)
 	if err != nil {
@@ -56,13 +88,37 @@ func (m *MockScribeEngine) StartProcessing(options ScribeOptions, progress chan<
 	}
 
 	if options.CreateDubbing {
+		// Check for cancellation before dubbing
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("operation cancelled: %w", ctx.Err())
+		default:
+		}
+
 		progress <- ProgressUpdate{0.8, "Creating dubbed audio..."}
-		time.Sleep(50 * time.Millisecond)
+
+		select {
+		case <-time.After(50 * time.Millisecond):
+		case <-ctx.Done():
+			return fmt.Errorf("operation cancelled: %w", ctx.Err())
+		}
 	}
 
 	if options.CreateSubtitles {
+		// Check for cancellation before subtitles
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("operation cancelled: %w", ctx.Err())
+		default:
+		}
+
 		progress <- ProgressUpdate{0.9, "Generating subtitles..."}
-		time.Sleep(50 * time.Millisecond)
+
+		select {
+		case <-time.After(50 * time.Millisecond):
+		case <-ctx.Done():
+			return fmt.Errorf("operation cancelled: %w", ctx.Err())
+		}
 	}
 
 	// Final result with JSON structure
