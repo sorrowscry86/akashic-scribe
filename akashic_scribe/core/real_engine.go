@@ -1,7 +1,9 @@
 package core
 
 import (
+	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +13,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -37,6 +41,132 @@ func (e *realScribeEngine) checkDependencies() error {
 	}
 
 	return nil
+}
+
+// parseYtDlpProgress parses yt-dlp output to extract download progress.
+// yt-dlp outputs progress like: "[download]  45.2% of 100.00MiB at 1.50MiB/s ETA 00:36"
+func parseYtDlpProgress(line string) (float64, bool) {
+	// Match patterns like "[download]  45.2%" or "[download] 100%"
+	re := regexp.MustCompile(`\[download\]\s+(\d+\.?\d*)%`)
+	matches := re.FindStringSubmatch(line)
+	if len(matches) >= 2 {
+		if percent, err := strconv.ParseFloat(matches[1], 64); err == nil {
+			return percent / 100.0, true
+		}
+	}
+	return 0, false
+}
+
+// parseFfmpegProgress parses ffmpeg output to extract encoding progress.
+// ffmpeg outputs progress like: "time=00:01:23.45 bitrate=1234.5kbits/s speed=2.5x"
+func parseFfmpegProgress(line string, duration float64) (float64, bool) {
+	// Match time= pattern
+	re := regexp.MustCompile(`time=(\d+):(\d+):(\d+\.?\d*)`)
+	matches := re.FindStringSubmatch(line)
+	if len(matches) >= 4 {
+		hours, _ := strconv.ParseFloat(matches[1], 64)
+		minutes, _ := strconv.ParseFloat(matches[2], 64)
+		seconds, _ := strconv.ParseFloat(matches[3], 64)
+		currentTime := hours*3600 + minutes*60 + seconds
+
+		if duration > 0 {
+			progress := currentTime / duration
+			if progress > 1.0 {
+				progress = 1.0
+			}
+			return progress, true
+		}
+	}
+	return 0, false
+}
+
+// runCommandWithProgress runs a command and reports progress via a channel.
+// It monitors stdout/stderr and calls the progress parser function.
+// The command can be cancelled via the context.
+func (e *realScribeEngine) runCommandWithProgress(
+	ctx context.Context,
+	cmd *exec.Cmd,
+	baseProgress float64,
+	progressRange float64,
+	progressChan chan<- ProgressUpdate,
+	statusMsg string,
+	parseFunc func(string) (float64, bool),
+) error {
+	// Create pipes for stderr (where yt-dlp and ffmpeg output progress)
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return fmt.Errorf("failed to create stderr pipe: %w", err)
+	}
+
+	// Also capture stdout for some tools
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return fmt.Errorf("failed to create stdout pipe: %w", err)
+	}
+
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("failed to start command: %w", err)
+	}
+
+	// Channel to signal when command completes
+	done := make(chan error, 1)
+
+	// Read progress from both stdout and stderr
+	go func() {
+		scanner := bufio.NewScanner(stderr)
+		for scanner.Scan() {
+			line := scanner.Text()
+			if parseFunc != nil {
+				if progress, ok := parseFunc(line); ok {
+					actualProgress := baseProgress + (progress * progressRange)
+					select {
+					case progressChan <- ProgressUpdate{actualProgress, statusMsg}:
+					case <-ctx.Done():
+						return
+					}
+				}
+			}
+		}
+	}()
+
+	go func() {
+		scanner := bufio.NewScanner(stdout)
+		for scanner.Scan() {
+			line := scanner.Text()
+			if parseFunc != nil {
+				if progress, ok := parseFunc(line); ok {
+					actualProgress := baseProgress + (progress * progressRange)
+					select {
+					case progressChan <- ProgressUpdate{actualProgress, statusMsg}:
+					case <-ctx.Done():
+						return
+					}
+				}
+			}
+		}
+	}()
+
+	// Wait for command to complete in goroutine
+	go func() {
+		done <- cmd.Wait()
+	}()
+
+	// Wait for either completion or cancellation
+	select {
+	case <-ctx.Done():
+		// Context cancelled - kill the process
+		if cmd.Process != nil {
+			if err := cmd.Process.Kill(); err != nil {
+				log.Printf("Warning: failed to kill process: %v", err)
+			}
+		}
+		// Wait for the command to actually exit
+		<-done
+		return fmt.Errorf("operation cancelled: %w", ctx.Err())
+	case err := <-done:
+		// Command completed
+		return err
+	}
 }
 
 // Transcribe takes a video source (local path or URL) and returns the transcription.
@@ -390,7 +520,15 @@ func (e *realScribeEngine) processAudio(inputPath, outputPath string, opts Scrib
 }
 
 // StartProcessing runs the full pipeline and reports progress.
-func (e *realScribeEngine) StartProcessing(options ScribeOptions, progress chan<- ProgressUpdate) error {
+// The operation can be cancelled via the provided context.
+func (e *realScribeEngine) StartProcessing(ctx context.Context, options ScribeOptions, progress chan<- ProgressUpdate) error {
+	// Check for cancellation before starting
+	select {
+	case <-ctx.Done():
+		return fmt.Errorf("operation cancelled before start: %w", ctx.Err())
+	default:
+	}
+
 	// Check dependencies first
 	if err := e.checkDependencies(); err != nil {
 		progress <- ProgressUpdate{0.0, fmt.Sprintf("Dependency check failed: %v", err)}
@@ -400,7 +538,6 @@ func (e *realScribeEngine) StartProcessing(options ScribeOptions, progress chan<
 	opts := options
 
 	progress <- ProgressUpdate{0.01, "Preparing job..."}
-	time.Sleep(200 * time.Millisecond)
 
 	// Step 1: Download or use local file
 	var videoPath string
@@ -411,9 +548,16 @@ func (e *realScribeEngine) StartProcessing(options ScribeOptions, progress chan<
 			return fmt.Errorf("input file not found: %w", err)
 		}
 		videoPath = opts.InputFile
-		progress <- ProgressUpdate{0.10, "Using local video file."}
+		progress <- ProgressUpdate{0.05, "Using local video file."}
 	} else if opts.InputURL != "" {
-		progress <- ProgressUpdate{0.10, "Downloading video from URL..."}
+		// Check for cancellation before download
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("operation cancelled: %w", ctx.Err())
+		default:
+		}
+
+		progress <- ProgressUpdate{0.05, "Starting video download..."}
 
 		// Create temporary directory for downloads
 		tempDir, err := os.MkdirTemp("", "akashic_scribe_download_*")
@@ -428,8 +572,10 @@ func (e *realScribeEngine) StartProcessing(options ScribeOptions, progress chan<
 		}()
 
 		videoPath = filepath.Join(tempDir, "downloaded_video.%(ext)s")
-		cmd := exec.Command("yt-dlp", "-o", videoPath, opts.InputURL)
-		if err := cmd.Run(); err != nil {
+		cmd := exec.Command("yt-dlp", "-o", videoPath, "--newline", opts.InputURL)
+
+		// Use progress tracking for download (0.05 to 0.20 = 15% range)
+		if err := e.runCommandWithProgress(ctx, cmd, 0.05, 0.15, progress, "Downloading video...", parseYtDlpProgress); err != nil {
 			progress <- ProgressUpdate{0.0, fmt.Sprintf("Failed to download video: %v", err)}
 			return fmt.Errorf("failed to download video: %w", err)
 		}
@@ -441,32 +587,46 @@ func (e *realScribeEngine) StartProcessing(options ScribeOptions, progress chan<
 			return errors.New("downloaded file not found")
 		}
 		videoPath = files[0]
+		progress <- ProgressUpdate{0.20, "Download complete"}
 	} else {
 		progress <- ProgressUpdate{0.0, "No input file or URL provided."}
 		return errors.New("no input file or URL")
 	}
 
-	// Step 2: Extract audio
-	progress <- ProgressUpdate{0.25, "Extracting audio..."}
-	time.Sleep(400 * time.Millisecond)
+	// Step 2: Extract audio (no need to extract separately, Transcribe handles this)
+	progress <- ProgressUpdate{0.25, "Preparing for transcription..."}
 
-	// Step 3: Transcription
-	progress <- ProgressUpdate{0.40, "Transcribing audio..."}
+	// Check for cancellation before transcription
+	select {
+	case <-ctx.Done():
+		return fmt.Errorf("operation cancelled: %w", ctx.Err())
+	default:
+	}
+
+	// Step 3: Transcription (20% to 50% = 30% range)
+	progress <- ProgressUpdate{0.30, "Transcribing audio..."}
 	transcription, err := e.Transcribe(videoPath)
 	if err != nil {
 		progress <- ProgressUpdate{0.0, fmt.Sprintf("Transcription failed: %v", err)}
 		return fmt.Errorf("transcription failed: %w", err)
 	}
-	time.Sleep(400 * time.Millisecond)
+	progress <- ProgressUpdate{0.50, "Transcription complete"}
 
-	// Step 4: Translation
-	progress <- ProgressUpdate{0.60, "Translating text..."}
+	// Check for cancellation before translation
+	select {
+	case <-ctx.Done():
+		return fmt.Errorf("operation cancelled: %w", ctx.Err())
+	default:
+	}
+
+	// Step 4: Translation (50% to 65% = 15% range)
+	progress <- ProgressUpdate{0.50, "Translating text..."}
 	translation, err := e.Translate(transcription, opts.TargetLanguage)
 	if err != nil {
 		progress <- ProgressUpdate{0.0, fmt.Sprintf("Translation failed: %v", err)}
 		return fmt.Errorf("translation failed: %w", err)
 	}
-	time.Sleep(400 * time.Millisecond)
+	progress <- ProgressUpdate{0.65, "Translation complete"}
 
 	// Prepare output directory early (needed for dubbing and final outputs)
 	outputDir := opts.OutputDir
@@ -482,10 +642,17 @@ func (e *realScribeEngine) StartProcessing(options ScribeOptions, progress chan<
 		return fmt.Errorf("failed to prepare output directory: %w", err)
 	}
 
-	// Step 5: (Optional) Dubbing
+	// Step 5: (Optional) Dubbing (65% to 85% = 20% range)
 	var dubbedAudioPath string
 	if opts.CreateDubbing {
-		progress <- ProgressUpdate{0.75, "Synthesizing dubbed audio with TTS..."}
+		// Check for cancellation before dubbing
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("operation cancelled: %w", ctx.Err())
+		default:
+		}
+
+		progress <- ProgressUpdate{0.68, "Synthesizing dubbed audio with TTS..."}
 
 		// Set default dubbing parameters
 		setDefaultDubbingParams(&opts)
@@ -493,24 +660,29 @@ func (e *realScribeEngine) StartProcessing(options ScribeOptions, progress chan<
 		// Generate dubbed audio
 		audioPath, err := e.GenerateDubbing(translation, opts, outputDir)
 		if err != nil {
-			progress <- ProgressUpdate{0.75, fmt.Sprintf("Warning: Dubbing failed: %v", err)}
+			progress <- ProgressUpdate{0.68, fmt.Sprintf("Warning: Dubbing failed: %v", err)}
 			// Don't fail the entire process, just log the warning
 			// User can still get transcription and translation
 		} else {
 			dubbedAudioPath = audioPath
-			progress <- ProgressUpdate{0.80, "Dubbed audio generated successfully"}
+			progress <- ProgressUpdate{0.85, "Dubbed audio generated successfully"}
 		}
 	}
 
-	// Step 6: (Optional) Subtitles
+	// Step 6: (Optional) Subtitles (85% to 90% = 5% range)
 	if opts.CreateSubtitles {
-		progress <- ProgressUpdate{0.85, "Generating subtitles..."}
-		time.Sleep(400 * time.Millisecond)
+		// Check for cancellation before subtitle generation
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("operation cancelled: %w", ctx.Err())
+		default:
+		}
+
+		progress <- ProgressUpdate{0.87, "Generating subtitles..."}
 	}
 
-	// Step 7: Compose final output
-	progress <- ProgressUpdate{0.95, "Composing final output..."}
-	time.Sleep(400 * time.Millisecond)
+	// Step 7: Compose final output (90% to 95% = 5% range)
+	progress <- ProgressUpdate{0.92, "Preparing final output..."}
 
 	// Step 8: Complete
 	result := struct {

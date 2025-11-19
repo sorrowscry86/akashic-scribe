@@ -1,9 +1,12 @@
 package core
 
+import "context"
+
 // ScribeEngine defines the interface for the core transcription and translation engine.
 //
 // Phase IV: The Animus (Backend Integration)
 // Adds StartProcessing for full workflow and progress reporting.
+// Phase 4.2: Added context.Context support for graceful cancellation.
 type ScribeEngine interface {
 	// Transcribe takes a video source (local path or URL) and returns the transcription.
 	Transcribe(videoSource string) (string, error)
@@ -12,7 +15,8 @@ type ScribeEngine interface {
 	Translate(text string, targetLanguage string) (string, error)
 
 	// StartProcessing runs the full pipeline and reports progress.
-	StartProcessing(options ScribeOptions, progress chan<- ProgressUpdate) error
+	// The context can be used to cancel the operation at any time.
+	StartProcessing(ctx context.Context, options ScribeOptions, progress chan<- ProgressUpdate) error
 }
 
 // ProgressUpdate is sent over the progress channel to report backend status.

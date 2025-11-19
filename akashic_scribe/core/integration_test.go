@@ -1,6 +1,7 @@
 package core
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 	"time"
@@ -90,7 +91,7 @@ func (suite *IntegrationTestSuite) TestProgressReportingIntegration() {
 	// Start processing in goroutine
 	processingComplete := make(chan error, 1)
 	go func() {
-		err := suite.mockEngine.StartProcessing(testOptions, progressChan)
+		err := suite.mockEngine.StartProcessing(context.Background(), testOptions, progressChan)
 		processingComplete <- err
 		close(progressChan)
 	}()
@@ -259,7 +260,7 @@ func (suite *IntegrationTestSuite) TestPerformanceBaseline() {
 
 	progressChan := make(chan ProgressUpdate, 10)
 	go func() {
-		err := suite.mockEngine.StartProcessing(testOptions, progressChan)
+		err := suite.mockEngine.StartProcessing(context.Background(), testOptions, progressChan)
 		assert.NoError(err, "Performance test processing should not error")
 		close(progressChan)
 	}()
@@ -295,7 +296,7 @@ func (suite *IntegrationTestSuite) TestMemoryUsage() {
 		}
 
 		go func() {
-			err := suite.mockEngine.StartProcessing(testOptions, progressChan)
+			err := suite.mockEngine.StartProcessing(context.Background(), testOptions, progressChan)
 			assert.NoError(err, "Memory test iteration %d should not error", i)
 			close(progressChan)
 		}()
@@ -346,7 +347,7 @@ func TestEngineInterfaceCompliance(t *testing.T) {
 		TargetLanguage: "Spanish",
 	}
 	go func() {
-		err := mockEngine.StartProcessing(testOptions, progressChan)
+		err := mockEngine.StartProcessing(context.Background(), testOptions, progressChan)
 		assert.NoError(err, "StartProcessing method should be callable")
 		close(progressChan)
 	}()
