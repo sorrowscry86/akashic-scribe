@@ -24,7 +24,8 @@ type ScribeOptions struct {
 	// Subtitle options
 	CreateSubtitles    bool   // Whether to generate subtitles
 	BilingualSubtitles bool   // Whether to include both languages in subtitles
-	SubtitlePosition   string // "Translation on Top" or "Translation on Bottom"
+	SubtitlePosition   string // "top" or "bottom" - position of translation in bilingual mode
+	SubtitleFormat     string // "srt" or "vtt" (default "srt")
 
 	// Dubbing options
 	CreateDubbing   bool    // Whether to generate dubbed audio
@@ -64,6 +65,9 @@ func (s ScribeOptions) String() string {
 	result += "Subtitle Options:\n"
 	if s.CreateSubtitles {
 		result += "  Create Subtitles: Enabled\n"
+		if s.SubtitleFormat != "" {
+			result += "  Format: " + s.SubtitleFormat + "\n"
+		}
 		if s.BilingualSubtitles {
 			result += "  Bilingual: Enabled (" + s.SubtitlePosition + ")\n"
 		} else {

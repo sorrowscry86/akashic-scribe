@@ -132,3 +132,101 @@ func (m *MockScribeEngine) StartProcessing(ctx context.Context, options ScribeOp
 	fmt.Println("Mock processing completed successfully.")
 	return nil
 }
+
+// ProcessWithContext simulates the full processing pipeline and returns a structured result.
+// This is used by the batch processor.
+func (m *MockScribeEngine) ProcessWithContext(ctx context.Context, options ScribeOptions, progress chan<- ProgressUpdate) (*ScribeResult, error) {
+	fmt.Printf("Mock ProcessWithContext called with options: %+v\n", options)
+
+	// Check for cancellation before starting
+	select {
+	case <-ctx.Done():
+		return nil, fmt.Errorf("operation cancelled before start: %w", ctx.Err())
+	default:
+	}
+
+	// Simulate the full processing pipeline with progress updates
+	progress <- ProgressUpdate{0.0, "Starting processing..."}
+
+	// Simulate transcription
+	select {
+	case <-time.After(50 * time.Millisecond):
+	case <-ctx.Done():
+		return nil, fmt.Errorf("operation cancelled: %w", ctx.Err())
+	}
+
+	progress <- ProgressUpdate{0.3, "Transcribing audio..."}
+	transcription, err := m.Transcribe(options.InputFile)
+	if err != nil {
+		return nil, err
+	}
+
+	// Check for cancellation
+	select {
+	case <-ctx.Done():
+		return nil, fmt.Errorf("operation cancelled: %w", ctx.Err())
+	default:
+	}
+
+	// Simulate translation
+	progress <- ProgressUpdate{0.6, "Translating text..."}
+	select {
+	case <-time.After(50 * time.Millisecond):
+	case <-ctx.Done():
+		return nil, fmt.Errorf("operation cancelled: %w", ctx.Err())
+	}
+
+	translation, err := m.Translate(transcription, options.TargetLanguage)
+	if err != nil {
+		return nil, err
+	}
+
+	result := &ScribeResult{
+		Transcription: transcription,
+		Translation:   translation,
+		OutputDir:     "/mock/output/dir",
+	}
+
+	if options.CreateDubbing {
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("operation cancelled: %w", ctx.Err())
+		default:
+		}
+
+		progress <- ProgressUpdate{0.8, "Creating dubbed audio..."}
+		select {
+		case <-time.After(30 * time.Millisecond):
+		case <-ctx.Done():
+			return nil, fmt.Errorf("operation cancelled: %w", ctx.Err())
+		}
+
+		result.DubbedAudio = "/mock/output/dir/dubbed_audio.mp3"
+	}
+
+	if options.CreateSubtitles {
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("operation cancelled: %w", ctx.Err())
+		default:
+		}
+
+		progress <- ProgressUpdate{0.9, "Generating subtitles..."}
+		select {
+		case <-time.After(30 * time.Millisecond):
+		case <-ctx.Done():
+			return nil, fmt.Errorf("operation cancelled: %w", ctx.Err())
+		}
+
+		format := options.SubtitleFormat
+		if format == "" {
+			format = "srt"
+		}
+		result.SubtitlesFile = fmt.Sprintf("/mock/output/dir/subtitles.%s", format)
+	}
+
+	progress <- ProgressUpdate{1.0, "Processing complete"}
+
+	fmt.Println("Mock processing with context completed successfully.")
+	return result, nil
+}
