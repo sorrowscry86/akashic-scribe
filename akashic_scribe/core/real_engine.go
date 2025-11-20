@@ -80,6 +80,36 @@ func parseFfmpegProgress(line string, duration float64) (float64, bool) {
 	return 0, false
 }
 
+// getVideoDuration extracts the actual duration of a video file using ffprobe.
+// Returns duration in seconds. Falls back to 180 seconds (3 minutes) if extraction fails.
+func (e *realScribeEngine) getVideoDuration(ctx context.Context, videoPath string) time.Duration {
+	// Use ffprobe to get video duration
+	// ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 <file>
+	cmd := exec.CommandContext(ctx, "ffprobe",
+		"-v", "error",
+		"-show_entries", "format=duration",
+		"-of", "default=noprint_wrappers=1:nokey=1",
+		videoPath)
+
+	output, err := cmd.Output()
+	if err != nil {
+		log.Printf("Warning: Failed to get video duration with ffprobe: %v. Using default 3 minutes.", err)
+		return 3 * time.Minute
+	}
+
+	// Parse the duration (in seconds)
+	durationStr := strings.TrimSpace(string(output))
+	durationSec, err := strconv.ParseFloat(durationStr, 64)
+	if err != nil {
+		log.Printf("Warning: Failed to parse video duration '%s': %v. Using default 3 minutes.", durationStr, err)
+		return 3 * time.Minute
+	}
+
+	duration := time.Duration(durationSec * float64(time.Second))
+	log.Printf("Video duration detected: %.2f seconds (%.2f minutes)", durationSec, durationSec/60)
+	return duration
+}
+
 // runCommandWithProgress runs a command and reports progress via a channel.
 // It monitors stdout/stderr and calls the progress parser function.
 // The command can be cancelled via the context.
@@ -709,9 +739,33 @@ func (e *realScribeEngine) StartProcessing(ctx context.Context, options ScribeOp
 		return fmt.Errorf("failed to write translation: %w", err)
 	}
 	if opts.CreateSubtitles {
-		srt := "1\n00:00:00,000 --> 00:00:03,000\n" + translation + "\n\n"
-		subtitlesPath := filepath.Join(outputDir, "subtitles.srt")
-		if err := os.WriteFile(subtitlesPath, []byte(srt), 0o644); err != nil {
+		// Use enhanced subtitle generator
+		subtitleGen := NewSubtitleGenerator()
+
+		// Get actual video duration using ffprobe
+		videoDuration := e.getVideoDuration(ctx, videoPath)
+		subtitleGen.CreateDefaultSegments(transcription, translation, videoDuration)
+
+		// Determine subtitle format
+		format := opts.SubtitleFormat
+		if format == "" {
+			format = "srt" // default to SRT
+		}
+
+		// Generate subtitle content
+		var subtitleContent string
+		var extension string
+
+		if format == "vtt" {
+			subtitleContent = subtitleGen.GenerateVTT(opts.BilingualSubtitles, opts.SubtitlePosition)
+			extension = ".vtt"
+		} else {
+			subtitleContent = subtitleGen.GenerateSRT(opts.BilingualSubtitles, opts.SubtitlePosition)
+			extension = ".srt"
+		}
+
+		subtitlesPath := filepath.Join(outputDir, "subtitles"+extension)
+		if err := os.WriteFile(subtitlesPath, []byte(subtitleContent), 0o644); err != nil {
 			progress <- ProgressUpdate{0.0, fmt.Sprintf("Failed to write subtitles: %v", err)}
 			return fmt.Errorf("failed to write subtitles: %w", err)
 		}
@@ -723,4 +777,176 @@ func (e *realScribeEngine) StartProcessing(ctx context.Context, options ScribeOp
 	progress <- ProgressUpdate{1.0, completionMsg}
 
 	return nil
+}
+
+// ProcessWithContext runs the full pipeline with context and returns a structured result.
+// This method is used by the batch processor for better result handling.
+func (e *realScribeEngine) ProcessWithContext(ctx context.Context, opts ScribeOptions, progress chan<- ProgressUpdate) (*ScribeResult, error) {
+	// Check dependencies first
+	if err := e.checkDependencies(); err != nil {
+		return nil, err
+	}
+
+	// Determine output directory
+	outputDir := opts.OutputDir
+	if outputDir == "" {
+		outputDir = filepath.Join(".", "akashic_output_"+time.Now().Format("20060102_150405"))
+	}
+
+	// Create output directory
+	if err := os.MkdirAll(outputDir, 0o755); err != nil {
+		return nil, fmt.Errorf("failed to create output directory: %w", err)
+	}
+
+	// Step 1: Obtain video file (download if URL, or use local file)
+	progress <- ProgressUpdate{0.0, "Starting..."}
+
+	var videoPath string
+
+	if opts.InputFile != "" {
+		// Verify local file exists
+		if _, err := os.Stat(opts.InputFile); err != nil {
+			return nil, fmt.Errorf("input file not found: %w", err)
+		}
+		videoPath = opts.InputFile
+		progress <- ProgressUpdate{0.05, "Using local file"}
+	} else if opts.InputURL != "" {
+		// Create temporary directory for download
+		tempDir, err := os.MkdirTemp("", "akashic_scribe_download_*")
+		if err != nil {
+			return nil, fmt.Errorf("failed to create temp directory: %w", err)
+		}
+		defer func() {
+			if err := os.RemoveAll(tempDir); err != nil {
+				log.Printf("Warning: failed to clean up temp directory %s: %v", tempDir, err)
+			}
+		}()
+
+		progress <- ProgressUpdate{0.05, "Downloading video..."}
+
+		// Download video using yt-dlp with progress tracking and cancellation support
+		videoPath = filepath.Join(tempDir, "downloaded_video.%(ext)s")
+		cmd := exec.CommandContext(ctx, "yt-dlp", "-o", videoPath, opts.InputURL)
+		
+		// Use runCommandWithProgress for cancellable downloads with progress reporting
+		if err := e.runCommandWithProgress(ctx, cmd, 0.05, 0.15, progress, "Downloading video...", parseYtDlpProgress); err != nil {
+			return nil, fmt.Errorf("failed to download video: %w", err)
+		}
+
+		// Find the actual downloaded file
+		files, err := filepath.Glob(filepath.Join(tempDir, "downloaded_video.*"))
+		if err != nil || len(files) == 0 {
+			return nil, errors.New("downloaded file not found")
+		}
+		videoPath = files[0]
+		progress <- ProgressUpdate{0.20, "Download complete"}
+	} else {
+		return nil, errors.New("no input file or URL provided")
+	}
+
+	// Step 2: Transcription
+	progress <- ProgressUpdate{0.30, "Transcribing audio..."}
+	transcription, err := e.Transcribe(videoPath)
+	if err != nil {
+		return nil, fmt.Errorf("transcription failed: %w", err)
+	}
+	progress <- ProgressUpdate{0.50, "Transcription complete"}
+
+	// Check for cancellation
+	select {
+	case <-ctx.Done():
+		return nil, fmt.Errorf("operation cancelled: %w", ctx.Err())
+	default:
+	}
+
+	// Step 3: Translation
+	progress <- ProgressUpdate{0.50, "Translating text..."}
+	translation, err := e.Translate(transcription, opts.TargetLanguage)
+	if err != nil {
+		return nil, fmt.Errorf("translation failed: %w", err)
+	}
+	progress <- ProgressUpdate{0.65, "Translation complete"}
+
+	// Check for cancellation
+	select {
+	case <-ctx.Done():
+		return nil, fmt.Errorf("operation cancelled: %w", ctx.Err())
+	default:
+	}
+
+	// Step 4: Optional dubbing
+	var dubbedAudioPath string
+	if opts.CreateDubbing {
+		progress <- ProgressUpdate{0.70, "Generating dubbed audio..."}
+		dubbedAudioPath, err = e.GenerateDubbing(translation, opts, outputDir)
+		if err != nil {
+			log.Printf("Warning: Dubbing failed but continuing: %v", err)
+			progress <- ProgressUpdate{0.80, "Dubbing failed, continuing without audio..."}
+		} else {
+			progress <- ProgressUpdate{0.80, "Dubbing complete"}
+		}
+	}
+
+	// Check for cancellation
+	select {
+	case <-ctx.Done():
+		return nil, fmt.Errorf("operation cancelled: %w", ctx.Err())
+	default:
+	}
+
+	// Step 5: Optional subtitles
+	var subtitlesPath string
+	if opts.CreateSubtitles {
+		progress <- ProgressUpdate{0.87, "Generating subtitles..."}
+
+		subtitleGen := NewSubtitleGenerator()
+		// Get actual video duration using ffprobe
+		videoDuration := e.getVideoDuration(ctx, videoPath)
+		subtitleGen.CreateDefaultSegments(transcription, translation, videoDuration)
+
+		format := opts.SubtitleFormat
+		if format == "" {
+			format = "srt"
+		}
+
+		var subtitleContent string
+		var extension string
+
+		if format == "vtt" {
+			subtitleContent = subtitleGen.GenerateVTT(opts.BilingualSubtitles, opts.SubtitlePosition)
+			extension = ".vtt"
+		} else {
+			subtitleContent = subtitleGen.GenerateSRT(opts.BilingualSubtitles, opts.SubtitlePosition)
+			extension = ".srt"
+		}
+
+		subtitlesPath = filepath.Join(outputDir, "subtitles"+extension)
+		if err := os.WriteFile(subtitlesPath, []byte(subtitleContent), 0o644); err != nil {
+			return nil, fmt.Errorf("failed to write subtitles: %w", err)
+		}
+	}
+
+	// Step 6: Save outputs
+	progress <- ProgressUpdate{0.97, "Saving outputs..."}
+
+	if err := os.WriteFile(filepath.Join(outputDir, "transcription.txt"), []byte(transcription), 0o644); err != nil {
+		return nil, fmt.Errorf("failed to write transcription: %w", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(outputDir, "translation.txt"), []byte(translation), 0o644); err != nil {
+		return nil, fmt.Errorf("failed to write translation: %w", err)
+	}
+
+	// Create result
+	result := &ScribeResult{
+		Transcription: transcription,
+		Translation:   translation,
+		DubbedAudio:   dubbedAudioPath,
+		SubtitlesFile: subtitlesPath,
+		OutputDir:     outputDir,
+	}
+
+	progress <- ProgressUpdate{1.0, "Processing complete"}
+
+	return result, nil
 }
