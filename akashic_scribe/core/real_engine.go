@@ -80,6 +80,36 @@ func parseFfmpegProgress(line string, duration float64) (float64, bool) {
 	return 0, false
 }
 
+// getVideoDuration extracts the actual duration of a video file using ffprobe.
+// Returns duration in seconds. Falls back to 180 seconds (3 minutes) if extraction fails.
+func (e *realScribeEngine) getVideoDuration(ctx context.Context, videoPath string) time.Duration {
+	// Use ffprobe to get video duration
+	// ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 <file>
+	cmd := exec.CommandContext(ctx, "ffprobe",
+		"-v", "error",
+		"-show_entries", "format=duration",
+		"-of", "default=noprint_wrappers=1:nokey=1",
+		videoPath)
+
+	output, err := cmd.Output()
+	if err != nil {
+		log.Printf("Warning: Failed to get video duration with ffprobe: %v. Using default 3 minutes.", err)
+		return 3 * time.Minute
+	}
+
+	// Parse the duration (in seconds)
+	durationStr := strings.TrimSpace(string(output))
+	durationSec, err := strconv.ParseFloat(durationStr, 64)
+	if err != nil {
+		log.Printf("Warning: Failed to parse video duration '%s': %v. Using default 3 minutes.", durationStr, err)
+		return 3 * time.Minute
+	}
+
+	duration := time.Duration(durationSec * float64(time.Second))
+	log.Printf("Video duration detected: %.2f seconds (%.2f minutes)", durationSec, durationSec/60)
+	return duration
+}
+
 // runCommandWithProgress runs a command and reports progress via a channel.
 // It monitors stdout/stderr and calls the progress parser function.
 // The command can be cancelled via the context.
@@ -712,9 +742,8 @@ func (e *realScribeEngine) StartProcessing(ctx context.Context, options ScribeOp
 		// Use enhanced subtitle generator
 		subtitleGen := NewSubtitleGenerator()
 
-		// Create default subtitle segments (will be improved with Whisper timestamps in future)
-		// Assuming 3-minute video for now - in production, get actual duration from video
-		videoDuration := 3 * time.Minute
+		// Get actual video duration using ffprobe
+		videoDuration := e.getVideoDuration(ctx, videoPath)
 		subtitleGen.CreateDefaultSegments(transcription, translation, videoDuration)
 
 		// Determine subtitle format
@@ -795,10 +824,12 @@ func (e *realScribeEngine) ProcessWithContext(ctx context.Context, opts ScribeOp
 
 		progress <- ProgressUpdate{0.05, "Downloading video..."}
 
-		// Download video using yt-dlp
+		// Download video using yt-dlp with progress tracking and cancellation support
 		videoPath = filepath.Join(tempDir, "downloaded_video.%(ext)s")
 		cmd := exec.CommandContext(ctx, "yt-dlp", "-o", videoPath, opts.InputURL)
-		if err := cmd.Run(); err != nil {
+		
+		// Use runCommandWithProgress for cancellable downloads with progress reporting
+		if err := e.runCommandWithProgress(ctx, cmd, 0.05, 0.15, progress, "Downloading video...", parseYtDlpProgress); err != nil {
 			return nil, fmt.Errorf("failed to download video: %w", err)
 		}
 
@@ -869,7 +900,8 @@ func (e *realScribeEngine) ProcessWithContext(ctx context.Context, opts ScribeOp
 		progress <- ProgressUpdate{0.87, "Generating subtitles..."}
 
 		subtitleGen := NewSubtitleGenerator()
-		videoDuration := 3 * time.Minute
+		// Get actual video duration using ffprobe
+		videoDuration := e.getVideoDuration(ctx, videoPath)
 		subtitleGen.CreateDefaultSegments(transcription, translation, videoDuration)
 
 		format := opts.SubtitleFormat

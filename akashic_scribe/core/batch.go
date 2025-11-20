@@ -4,22 +4,25 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"path/filepath"
+	"runtime"
 	"sync"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // BatchJob represents a single job in a batch processing queue.
 type BatchJob struct {
-	ID          string        // Unique identifier for the job
-	Options     ScribeOptions // Processing options for this job
-	Status      JobStatus     // Current status of the job
-	Error       error         // Error if job failed
-	Result      *ScribeResult // Result if job succeeded
-	StartTime   time.Time     // When the job started processing
-	EndTime     time.Time     // When the job completed
-	Progress    float64       // Current progress (0.0 to 1.0)
-	StatusMsg   string        // Current status message
+	ID          string             // Unique identifier for the job
+	Options     ScribeOptions      // Processing options for this job
+	Status      JobStatus          // Current status of the job
+	Error       error              // Error if job failed
+	Result      *ScribeResult      // Result if job succeeded
+	StartTime   time.Time          // When the job started processing
+	EndTime     time.Time          // When the job completed
+	Progress    float64            // Current progress (0.0 to 1.0)
+	StatusMsg   string             // Current status message
+	jobCancel   context.CancelFunc // Function to cancel this specific job
 }
 
 // JobStatus represents the current state of a batch job.
@@ -58,6 +61,7 @@ type BatchProcessor struct {
 	jobQueue       chan *BatchJob
 	maxConcurrent  int
 	workers        sync.WaitGroup
+	jobWaitGroup   sync.WaitGroup // Tracks active jobs for efficient waiting
 	ctx            context.Context
 	cancel         context.CancelFunc
 	mu             sync.RWMutex
@@ -83,7 +87,7 @@ type BatchProgress struct {
 //   - maxConcurrent: Maximum number of jobs to process simultaneously (0 = number of CPUs)
 func NewBatchProcessor(engine ScribeEngine, maxConcurrent int) *BatchProcessor {
 	if maxConcurrent <= 0 {
-		maxConcurrent = 1 // Default to 1 for safety
+		maxConcurrent = runtime.NumCPU() // Default to number of CPUs for performance
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -108,12 +112,12 @@ func NewBatchProcessor(engine ScribeEngine, maxConcurrent int) *BatchProcessor {
 }
 
 // AddJob adds a new job to the batch queue.
+// This method will block if the queue is full to prevent unbounded goroutine creation.
 func (bp *BatchProcessor) AddJob(options ScribeOptions) string {
 	bp.mu.Lock()
-	defer bp.mu.Unlock()
 
-	// Generate unique job ID
-	jobID := fmt.Sprintf("job_%d_%s", time.Now().UnixNano(), filepath.Base(options.InputFile))
+	// Generate unique job ID using UUID to prevent collisions
+	jobID := fmt.Sprintf("job_%s", uuid.New().String())
 
 	job := &BatchJob{
 		ID:      jobID,
@@ -122,15 +126,12 @@ func (bp *BatchProcessor) AddJob(options ScribeOptions) string {
 	}
 
 	bp.jobs[jobID] = job
+	bp.jobWaitGroup.Add(1) // Track this job for Wait()
+	bp.mu.Unlock()
 
-	// Add to queue
-	select {
-	case bp.jobQueue <- job:
-		log.Printf("Batch: Job %s added to queue", jobID)
-	default:
-		log.Printf("Batch: Warning - job queue is full, job %s will wait", jobID)
-		go func() { bp.jobQueue <- job }()
-	}
+	// Add to queue (blocks if full, preventing goroutine leak)
+	log.Printf("Batch: Job %s added to queue", jobID)
+	bp.jobQueue <- job
 
 	return jobID
 }
@@ -155,9 +156,16 @@ func (bp *BatchProcessor) worker(workerID int) {
 
 // processJob processes a single job.
 func (bp *BatchProcessor) processJob(workerID int, job *BatchJob) {
+	defer bp.jobWaitGroup.Done() // Mark job complete for Wait()
+
+	// Create a cancellable context for this job
+	jobCtx, jobCancel := context.WithCancel(bp.ctx)
+	defer jobCancel()
+
 	bp.mu.Lock()
 	job.Status = JobRunning
 	job.StartTime = time.Now()
+	job.jobCancel = jobCancel // Store cancel function for CancelJob()
 	bp.mu.Unlock()
 
 	log.Printf("Batch: Worker %d processing job %s", workerID, job.ID)
@@ -183,10 +191,6 @@ func (bp *BatchProcessor) processJob(workerID int, job *BatchJob) {
 			}
 		}
 	}()
-
-	// Create a cancellable context for this job
-	jobCtx, jobCancel := context.WithCancel(bp.ctx)
-	defer jobCancel()
 
 	// Process the job
 	result, err := bp.engine.ProcessWithContext(jobCtx, job.Options, progressChan)
@@ -257,11 +261,11 @@ func (bp *BatchProcessor) sendProgress() {
 	progress.CurrentJobID = currentJobID
 	progress.CurrentJobMsg = currentJobMsg
 
-	// Non-blocking send
+	// Non-blocking send with logging when dropped
 	select {
 	case bp.progressChan <- progress:
 	default:
-		// Channel full, skip this update
+		log.Printf("Warning: Progress update dropped (channel full) [OverallPercent=%.2f%%]", progress.OverallPercent*100)
 	}
 }
 
@@ -305,7 +309,12 @@ func (bp *BatchProcessor) CancelJob(jobID string) error {
 		return fmt.Errorf("job %s already finished with status: %s", jobID, job.Status)
 	}
 
-	// Mark as cancelled - the context cancellation will handle the rest
+	// Actually cancel the running job by calling its cancel function
+	if job.jobCancel != nil {
+		job.jobCancel()
+		log.Printf("Batch: Cancelling job %s", jobID)
+	}
+
 	job.Status = JobCancelled
 	return nil
 }
@@ -317,6 +326,9 @@ func (bp *BatchProcessor) CancelAll() {
 
 	for _, job := range bp.jobs {
 		if job.Status == JobPending || job.Status == JobRunning {
+			if job.jobCancel != nil {
+				job.jobCancel()
+			}
 			job.Status = JobCancelled
 		}
 	}
@@ -324,24 +336,8 @@ func (bp *BatchProcessor) CancelAll() {
 
 // Wait waits for all jobs to complete and shuts down the processor.
 func (bp *BatchProcessor) Wait() {
-	// Wait for all jobs to be processed
-	for {
-		bp.mu.RLock()
-		allDone := true
-		for _, job := range bp.jobs {
-			if job.Status == JobPending || job.Status == JobRunning {
-				allDone = false
-				break
-			}
-		}
-		bp.mu.RUnlock()
-
-		if allDone {
-			break
-		}
-
-		time.Sleep(100 * time.Millisecond)
-	}
+	// Efficiently wait for all jobs using WaitGroup instead of polling
+	bp.jobWaitGroup.Wait()
 
 	// Shutdown workers
 	bp.cancel()

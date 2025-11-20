@@ -49,10 +49,10 @@ videoDuration := 3 * time.Minute
 gen.CreateDefaultSegments(originalText, translatedText, videoDuration)
 
 // Generate SRT format
-srtContent := gen.GenerateSRT(bilingual=true, position="bottom")
+srtContent := gen.GenerateSRT(true, "bottom")
 
 // Generate WebVTT format
-vttContent := gen.GenerateVTT(bilingual=true, position="top")
+vttContent := gen.GenerateVTT(true, "top")
 ```
 
 #### New Options Added
@@ -97,6 +97,28 @@ A robust batch processing framework that allows processing multiple videos simul
 ```go
 // Create batch processor with 3 concurrent workers
 processor := core.NewBatchProcessor(engine, 3)
+
+// Define options for each job
+options1 := core.ScribeOptions{
+    InputFile:       "video1.mp4",
+    OriginLanguage:  "en-US",
+    TargetLanguage:  "es-ES",
+    CreateSubtitles: true,
+}
+
+options2 := core.ScribeOptions{
+    InputFile:       "video2.mp4",
+    OriginLanguage:  "en-US",
+    TargetLanguage:  "ja-JP",
+    CreateSubtitles: true,
+}
+
+options3 := core.ScribeOptions{
+    InputFile:       "video3.mp4",
+    OriginLanguage:  "en-US",
+    TargetLanguage:  "fr-FR",
+    CreateSubtitles: true,
+}
 
 // Add jobs to the batch
 jobID1 := processor.AddJob(options1)
@@ -183,6 +205,9 @@ A comprehensive template management system that allows users to save and reuse c
 // Create template manager
 configDir := "/path/to/config"
 tm, err := core.NewTemplateManager(configDir)
+if err != nil {
+    log.Fatal(err)
+}
 
 // Save a template from current options
 err = tm.CreateTemplateFromOptions(
@@ -191,6 +216,9 @@ err = tm.CreateTemplateFromOptions(
     "Anime",
     currentOptions,
 )
+if err != nil {
+    log.Printf("Failed to create template: %v", err)
+}
 
 // List all templates
 templates := tm.ListTemplates()
@@ -201,8 +229,16 @@ for _, tmpl := range templates {
 // List templates by category
 podcastTemplates := tm.ListTemplatesByCategory("Podcast")
 
-// Apply a template
+// Apply a template to existing options
+myOptions := core.ScribeOptions{
+    InputFile: "my-video.mp4",
+    OutputDir: "./output",
+}
+
 err = tm.ApplyTemplate("YouTube Video", &myOptions)
+if err != nil {
+    log.Printf("Failed to apply template: %v", err)
+}
 // Input/output paths are preserved!
 
 // Delete a template

@@ -1,10 +1,13 @@
 package core
 
 import (
+	"crypto/md5"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -130,11 +133,13 @@ func (tm *TemplateManager) LoadAll() error {
 		filePath := filepath.Join(tm.templatesDir, entry.Name())
 		data, err := os.ReadFile(filePath)
 		if err != nil {
+			log.Printf("Warning: Could not read template file %s: %v", filePath, err)
 			continue // Skip files we can't read
 		}
 
 		var template ProjectTemplate
 		if err := json.Unmarshal(data, &template); err != nil {
+			log.Printf("Warning: Could not parse template file %s: %v", filePath, err)
 			continue // Skip invalid templates
 		}
 
@@ -327,22 +332,33 @@ func (tm *TemplateManager) CreateTemplateFromOptions(name, description, category
 }
 
 // sanitizeFilename removes or replaces characters that are invalid in filenames.
+// Uses strings.Builder for performance and adds a hash suffix to prevent collisions.
 func sanitizeFilename(name string) string {
-	// Replace spaces with underscores
-	result := ""
+	var builder strings.Builder
+	builder.Grow(len(name) + 9) // Pre-allocate for name + "_" + 8-char hash
+
+	// Allow alphanumeric, spaces, dashes, underscores, dots, and parentheses
+	// Replace other characters with underscores
 	for _, ch := range name {
 		switch {
 		case ch >= 'a' && ch <= 'z':
-			result += string(ch)
+			builder.WriteRune(ch)
 		case ch >= 'A' && ch <= 'Z':
-			result += string(ch)
+			builder.WriteRune(ch)
 		case ch >= '0' && ch <= '9':
-			result += string(ch)
-		case ch == ' ' || ch == '-':
-			result += "_"
-		case ch == '_':
-			result += "_"
+			builder.WriteRune(ch)
+		case ch == ' ' || ch == '-' || ch == '_':
+			builder.WriteRune('_')
+		case ch == '.' || ch == '(' || ch == ')':
+			builder.WriteRune(ch) // Allow these safe characters
+		default:
+			builder.WriteRune('_') // Replace invalid chars with underscore
 		}
 	}
-	return result
+
+	// Add hash suffix to prevent collisions (e.g., "My Template!" and "My Template?" both become different)
+	hash := md5.Sum([]byte(name))
+	builder.WriteString(fmt.Sprintf("_%x", hash[:4])) // Use first 4 bytes (8 hex chars)
+
+	return builder.String()
 }

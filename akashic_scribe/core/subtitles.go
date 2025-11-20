@@ -2,6 +2,7 @@ package core
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -177,23 +178,42 @@ func (sg *SubtitleGenerator) CreateDefaultSegments(originalText, translatedText 
 	}
 }
 
-// splitIntoSentences splits text into sentences using basic punctuation.
+// splitIntoSentences splits text into sentences using robust regex patterns.
+// Handles common edge cases like abbreviations, multiple spaces, and end-of-text.
 func splitIntoSentences(text string) []string {
-	// Replace common sentence endings with a delimiter
-	text = strings.ReplaceAll(text, ". ", ".|")
-	text = strings.ReplaceAll(text, "! ", "!|")
-	text = strings.ReplaceAll(text, "? ", "?|")
+	if text == "" {
+		return []string{}
+	}
 
-	// Split on delimiter
-	sentences := strings.Split(text, "|")
+	// Regex pattern for sentence boundaries:
+	// Matches . ! ? followed by one or more spaces OR end of string
+	// The pattern uses lookahead to find proper sentence boundaries
+	pattern := `([.!?]+)(?:\s+|$)`
+	re := regexp.MustCompile(pattern)
 
-	// Clean up and filter empty sentences
-	result := make([]string, 0, len(sentences))
-	for _, s := range sentences {
-		s = strings.TrimSpace(s)
-		if s != "" {
-			result = append(result, s)
+	// Split on sentence boundaries but keep the punctuation
+	parts := re.Split(text, -1)
+	matches := re.FindAllString(text, -1)
+
+	// Reconstruct sentences with their punctuation
+	result := make([]string, 0, len(parts))
+	for i, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
 		}
+
+		// Append the punctuation back if it exists
+		if i < len(matches) {
+			part += strings.TrimSpace(matches[i])
+		}
+
+		result = append(result, part)
+	}
+
+	// Handle case where text doesn't end with punctuation
+	if len(result) == 0 && text != "" {
+		result = append(result, strings.TrimSpace(text))
 	}
 
 	return result
